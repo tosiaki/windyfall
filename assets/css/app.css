@@ -1,0 +1,684 @@
+@import "tailwindcss/base";
+@import "tailwindcss/components";
+@import "tailwindcss/utilities";
+@plugin "@tailwindcss/typography";
+
+/* Windyfall Theme Variables */
+:root {
+  /* Core Palette */
+  --color-primary: #38bdf8;        /* Sky blue (like water/wind) */
+  --color-primary-rgb: 56, 189, 248; /* RGB version for rgba() */
+  --color-primary-dark: #0ea5e9;  /* Deeper blue for hover/accents */
+  --color-secondary: #0ea5e9;      /* Currently same as primary-dark */
+  --color-accent: #22d3ee;        /* Cyan (like mist/highlight) */
+
+  /* Backgrounds / Surfaces */
+  --color-background-start: hsl(195, 76%, 96%); /* Very light blue */
+  --color-background-end: hsl(195, 76%, 92%);   /* Slightly deeper light blue */
+  --color-surface: #ffffff;          /* White for cards/modals */
+  --color-surface-alt: #f8fafc;       /* Off-white / very light gray */
+  --color-surface-hover: #f1f5f9;    /* Light gray for hover (gray-100) */
+  --color-surface-subtle: rgba(255, 255, 255, 0.7); /* Subtle transparency */
+
+  /* Text */
+  --color-text: #1e293b;            /* Dark blue-gray (slate-800) */
+  --color-text-secondary: #64748b;   /* Medium gray (slate-500) */
+  --color-text-tertiary: #94a3b8;    /* Lighter gray (slate-400) */
+  --color-text-on-primary: #ffffff; /* White text on primary buttons */
+
+  /* Borders */
+  --color-border: #e2e8f0;          /* Light gray (slate-200) */
+  --color-border-accent: var(--color-primary); /* Use primary color for focus/active borders */
+
+  /* Animations */
+  --animation-water-flow-bg: water-flow-bg 20s ease infinite;
+  --animation-water-reflect: water-reflect 3s linear infinite;
+  --animation-float: float 20s linear infinite;
+  --animation-wind-flow: wind-flow 15s infinite linear; /* If using wind pattern */
+}
+
+/* Base Body Style */
+body {
+  background: linear-gradient(
+    160deg, /* Changed angle slightly */
+    var(--color-background-start) 0%,
+    var(--color-background-end) 100%
+  );
+  background-size: 200% 200%; /* Needed for animation */
+  animation: var(--animation-water-flow-bg);
+  color: var(--color-text);
+  /* Add font smoothing for better text rendering */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Transition definitions */
+.message-enter-active, .message-leave-active {
+  transition: all 0.3s ease;
+}
+.message-enter-from {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+.message-leave-to {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+/* Message Group Separator */
+.group-message + .group-message {
+  padding-top: 0.75rem;
+  /* Use a subtle border color related to the surface */
+  border-top: 1px solid rgba(0, 0, 0, 0.05); /* Darker for light mode */
+}
+
+/* Adjust border for dark mode if needed later */
+/* .dark .group-message + .group-message {
+  border-top-color: rgba(255, 255, 255, 0.1);
+} */
+
+/* Tooltip (keep as is, maybe adjust bg color) */
+.tooltip-text::before {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-left: -5px;
+  border-width: 5px;
+  border-style: solid;
+  /* Use dark text color for tooltip bg */
+  border-color: var(--color-text) transparent transparent transparent;
+}
+
+.group-hover .tooltip-text {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+/* Mobile Thread Column Slide */
+@media (max-width: 768px) {
+  [data-thread-open] {
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+  }
+
+  [data-thread-open="true"] {
+    transform: translateX(0);
+  }
+
+  .thread-messages-column {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    background: var(--color-surface); /* Use surface color */
+    z-index: 10; /* Ensure it's above thread list */
+  }
+}
+
+/* Floating leaves effect */
+.leaf {
+  position: fixed;
+  opacity: 0.6; /* Slightly less opaque */
+  animation: var(--animation-float);
+  pointer-events: none;
+  z-index: 5; /* Behind modals but above background */
+  /* Use a slightly smaller font size for subtlety */
+  font-size: 0.8rem;
+}
+
+/* Water Button Style */
+.water-button {
+  background: linear-gradient(45deg, var(--color-primary), var(--color-accent)); /* Use accent */
+  color: var(--color-text-on-primary);
+  position: relative;
+  overflow: hidden;
+  transition: background 0.3s ease; /* Add transition */
+}
+
+.water-button:hover {
+   background: linear-gradient(45deg, var(--color-primary-dark), var(--color-primary)); /* Darken on hover */
+}
+
+.water-button::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(45deg, transparent, rgba(255,255,255,0.2), transparent);
+  transform: rotate(45deg);
+  animation: var(--animation-water-reflect);
+}
+
+/* Message Line Hover Highlight */
+.group\/line:hover {
+  background: rgba(0,0,0,0.03);
+  border-radius: 3px;
+  margin: -0.25rem -0.5rem;
+  padding: 0.25rem 0.5rem;
+}
+
+[data-user-self] .group\/line:hover {
+  /* Slightly lighter highlight for self messages on blue bg */
+  background: rgba(255,255,255,0.08);
+}
+
+/* Reaction Picker & Items */
+.reaction-picker {
+  @apply absolute z-20; /* Ensure picker is above message content */
+  /* Position above the message */
+  bottom: calc(100% + 0.5rem); /* Space above */
+  left: 50%;
+  transform: translateX(-50%); /* Center horizontally */
+  background: var(--color-surface);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  border-radius: 1.5rem; /* More rounded */
+  padding: 0.3rem; /* Tighter padding */
+  display: flex;
+  gap: 0.3rem; /* Tighter gap */
+  opacity: 0;
+  transform-origin: bottom center; /* Animate from bottom */
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none; /* Allow clicking through when hidden */
+}
+
+.group\/message:hover .reaction-picker,
+.reaction-picker:focus-within {
+  opacity: 1;
+  transform: translateX(-50%) scale(1); /* Adjust transform for centering */
+  pointer-events: auto; /* Enable interaction when shown */
+}
+
+.reaction-item {
+  transition: background-color 0.2s ease, transform 0.2s ease;
+  @apply p-1 rounded-full hover:bg-gray-100; /* Add padding and hover bg */
+}
+.reaction-item button {
+   display: block; /* Ensure button takes space */
+   font-size: 1.1rem; /* Slightly smaller emoji */
+}
+.reaction-item:hover {
+   transform: scale(1.1); /* Scale up emoji on hover */
+}
+
+
+/* Reaction Badge */
+.reaction {
+  @apply flex items-center gap-1 px-2 py-0.5; /* Smaller padding */
+  border-radius: 9999px; /* pill shape */
+  background-color: var(--color-surface-alt); /* Use alt surface */
+  border: 1px solid var(--color-border);
+  color: var(--color-text-secondary);
+  transition: all 0.15s ease;
+  transform-origin: center;
+  cursor: pointer;
+  font-size: 0.8rem; /* Smaller text */
+}
+
+.reaction:hover {
+   border-color: var(--color-border-accent); /* Use accent border on hover */
+   background-color: var(--color-surface-hover);
+   /* Optional: Add slight scale on hover if desired */
+   /* transform: scale(1.05); */
+}
+
+/* User Reacted State */
+.reaction[data-user-reacted="true"] { /* Match the data attribute value */
+  background-color: hsl(205, 100%, 95%); /* Lighter blue */
+  border-color: var(--color-primary);
+  color: var(--color-primary-dark); /* Darker blue text */
+  transform: scale(1.05); /* Keep scale effect */
+}
+.reaction[data-user-reacted="true"] .count {
+   color: var(--color-primary-dark); /* Ensure count color matches */
+}
+
+/* Hide reaction if count is 0 */
+.reaction[data-count="0"] {
+  @apply hidden;
+}
+
+/* Animation for Reactions */
+.reaction[data-animation="bounce"] {
+  animation: bounce 0.3s ease;
+}
+.reaction[data-animation="fade"] {
+  animation: fade 0.2s ease;
+}
+
+.reactions-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding-left: 0.75rem;
+  padding-right: 0.75rem;
+  width: fit-content;
+  max-width: 100%;
+}
+
+.reactions-container:has(> .reaction:not([data-count="0"])) {
+  /* Apply the vertical spacing here */
+  margin-top: 0.5rem;    /* mt-2 */
+  padding-bottom: 0.5rem; /* pb-2 */
+}
+
+[data-is-user="true"] .reactions-container {
+  margin-left: auto; /* Push container to the right for self messages */
+}
+[data-is-user="false"] .reactions-container {
+  margin-right: auto; /* Keep container to the left for other messages */
+}
+
+.bubble-container > .message-bubble:last-child {
+   padding-bottom: 0.5rem; /* pb-2 - Adjust as needed */
+   /* This adds padding below the *entire* last message line area,
+      including where reactions *would* be if they existed. */
+}
+
+.timestamp {
+  @apply text-xs text-current opacity-70 inline-block ml-2 align-baseline;
+}
+
+.reply-context {
+  /* Use Tailwind apply */
+  @apply flex items-center text-xs px-2 py-1
+         ml-1 mr-1 /* Slight horizontal inset */
+         rounded-md border-l-4 /* Thicker left border */
+         cursor-pointer transition-opacity duration-150;
+
+  /* --- Adjust Vertical Margins --- */
+  margin-top: 0.375rem; /* mt-1.5 - Push down from content above */
+  margin-bottom: 0.125rem; /* mb-0.5 - Reduce space below, relying on text padding */
+
+  /* Default opacity */
+  opacity: 0.75;
+}
+.reply-context:hover {
+    opacity: 1;
+}
+
+/* Default colors (for others' messages - inside white bubble) */
+.reply-context {
+  background-color: var(--color-surface-alt); /* Off-white / very light gray bg */
+  border-color: var(--color-border-accent);   /* Primary color border */
+  color: var(--color-text-secondary);         /* Medium gray text */
+}
+.reply-context .icon { /* Icon color for others' replies */
+  color: var(--color-text-tertiary);
+}
+
+/* Colors for self-messages (inside blue bubble) */
+[data-is-user="true"] .reply-context {
+  background-color: rgba(255, 255, 255, 0.15); /* More visible white bg */
+  border-color: rgba(255, 255, 255, 0.6);    /* Lighter, more visible border */
+  color: rgba(255, 255, 255, 0.9);          /* Brighter white text */
+}
+[data-is-user="true"] .reply-context .icon { /* Icon color for self replies */
+  color: rgba(255, 255, 255, 0.7);
+}
+
+/* Icon specific styles within reply context */
+.reply-context .icon {
+   @apply shrink-0 w-3.5 h-3.5 mr-1.5; /* Size and space */
+}
+
+.message-content { /* You might already have a class or use the helper */
+    @apply relative px-3 pt-1.5 pb-1.5; /* Ensure consistent vertical padding */
+    /* Add color classes here or keep them in the helper */
+}
+/* Add conditional color if not handled by helper */
+.message-bubble[data-is-user="true"] {
+  color: var(--color-text-on-primary); /* Text inside blue bubble */
+}
+.message-bubble[data-is-user="false"] {
+  color: var(--color-text); /* Text inside white bubble */
+}
+
+@keyframes bounce {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); } /* Slightly smaller bounce */
+}
+@keyframes fade {
+  from { opacity: 0.5; }
+  to { opacity: 1; }
+}
+
+/* Context Menu Styles */
+#message-context-menu {
+  @apply fixed z-50 hidden bg-white rounded-md shadow-lg border border-gray-200 py-1 min-w-[180px];
+  /* Add any other base styles like font size etc. if needed */
+}
+
+#message-context-menu ul {
+  @apply list-none p-0 m-0;
+}
+
+#message-context-menu li button,
+#message-context-menu li a { /* If using links later */
+  @apply block w-full text-left px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+#message-context-menu li button svg,
+#message-context-menu li a svg {
+  @apply inline-block w-4 h-4 mr-2 align-text-bottom text-gray-500;
+}
+
+#message-context-menu hr {
+  @apply my-1 border-t border-gray-100;
+}
+
+/* Style for the '...' button in hover menu */
+.reaction-item .more-options-button {
+  @apply p-1 rounded-full hover:bg-gray-100; /* Match reaction item hover */
+}
+.reaction-item .more-options-button svg {
+   @apply w-4 h-4 text-[var(--color-text-secondary)];
+}
+
+.highlight-message {
+  transition: background-color 0.3s ease-in-out, box-shadow 0.3s ease-in-out;
+  background-color: rgba(var(--color-primary-rgb), 0.1); /* Subtle background */
+  outline: 2px solid rgba(var(--color-primary-rgb), 0.3); /* Use outline instead of shadow */
+  outline-offset: 2px;
+  border-radius: 4px; /* Optional: rounded corners */
+}
+
+/* --- Markdown Styling --- */
+/* Apply within message bubbles */
+.message-bubble .prose {
+  /* Base text color is inherited from message_content_classes */
+  /* Reset link color for within prose */
+  --tw-prose-links: var(--color-primary);
+  --tw-prose-bold: currentColor; /* Use current text color for bold */
+  --tw-prose-italic: currentColor;
+  --tw-prose-strikethrough: currentColor;
+  --tw-prose-quotes: var(--color-text-secondary);
+  --tw-prose-quote-borders: var(--color-border-accent);
+  --tw-prose-code: var(--color-primary-dark); /* Color for inline code */
+  --tw-prose-pre-code: inherit; /* Inherit color for code blocks */
+  --tw-prose-pre-bg: rgba(0, 0, 0, 0.05); /* Subtle background for code blocks */
+  --tw-prose-hr: var(--color-border);
+  --tw-prose-bullets: var(--color-text-tertiary);
+  --tw-prose-counters: var(--color-text-tertiary);
+  /* Add variables for headings if needed */
+}
+
+/* General Prose Styles */
+.message-bubble .prose strong,
+.message-bubble .prose b {
+  font-weight: 600; /* Semibold */
+  color: var(--tw-prose-bold);
+}
+
+.message-bubble .prose em,
+.message-bubble .prose i {
+  font-style: italic;
+  color: var(--tw-prose-italic);
+}
+
+.message-bubble .prose s,
+.message-bubble .prose del,
+.message-bubble .prose strike {
+   text-decoration: line-through;
+   color: var(--tw-prose-strikethrough);
+}
+
+.message-bubble .prose a {
+  color: var(--tw-prose-links);
+  text-decoration: underline;
+  text-decoration-thickness: 1px; /* Subtle underline */
+  text-underline-offset: 2px;
+  transition: color 0.2s ease;
+}
+.message-bubble .prose a:hover {
+  color: var(--color-primary-dark);
+}
+
+/* Lists */
+.message-bubble .prose ul,
+.message-bubble .prose ol {
+  margin-top: 0.75em;
+  margin-bottom: 0.75em;
+  padding-left: 1.75em; /* Indentation */
+}
+.message-bubble .prose ul {
+  list-style-type: disc;
+}
+.message-bubble .prose ol {
+  list-style-type: decimal;
+}
+.message-bubble .prose li {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+.message-bubble .prose ul > li::marker,
+.message-bubble .prose ol > li::marker {
+  color: var(--tw-prose-bullets);
+}
+/* Nested lists */
+.message-bubble .prose ul ul, .message-bubble .prose ul ol,
+.message-bubble .prose ol ul, .message-bubble .prose ol ol {
+   margin-top: 0.4em;
+   margin-bottom: 0.4em;
+}
+
+/* Blockquotes */
+.message-bubble .prose blockquote {
+  margin-top: 1em;
+  margin-bottom: 1em;
+  padding-left: 1em;
+  border-left-width: 4px; /* Thicker border */
+  border-color: var(--tw-prose-quote-borders);
+  color: var(--tw-prose-quotes);
+  font-style: italic;
+}
+.message-bubble .prose blockquote p:first-of-type::before { content: none; } /* Remove potential default quote marks */
+.message-bubble .prose blockquote p:last-of-type::after { content: none; }
+
+/* Code */
+.message-bubble .prose code {
+  color: var(--tw-prose-code);
+  font-family: monospace;
+  font-size: 0.9em; /* Slightly smaller */
+  /* Subtle background/padding for inline code */
+  background-color: rgba(0,0,0,0.04);
+  padding: 0.1em 0.4em;
+  border-radius: 3px;
+  /* Prevent wrapping */
+  white-space: nowrap;
+}
+/* Remove background/padding for code within pre */
+.message-bubble .prose pre code {
+  background-color: transparent;
+  padding: 0;
+  border-radius: 0;
+  white-space: pre; /* Allow wrapping within pre */
+}
+
+.message-bubble .prose pre {
+  color: var(--tw-prose-pre-code);
+  background-color: var(--tw-prose-pre-bg);
+  border-radius: 6px; /* Rounded corners for block */
+  padding: 0.75em 1em;
+  margin-top: 1em;
+  margin-bottom: 1em;
+  overflow-x: auto; /* Allow horizontal scrolling for long lines */
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+/* Headings */
+.message-bubble .prose h1,
+.message-bubble .prose h2,
+.message-bubble .prose h3,
+.message-bubble .prose h4,
+.message-bubble .prose h5,
+.message-bubble .prose h6 {
+  margin-top: 1.2em;
+  margin-bottom: 0.6em;
+  font-weight: 600; /* Semibold */
+  line-height: 1.3;
+}
+.message-bubble .prose h1 { font-size: 1.5em; } /* Adjust sizes as needed */
+.message-bubble .prose h2 { font-size: 1.3em; }
+.message-bubble .prose h3 { font-size: 1.15em; }
+.message-bubble .prose h4 { font-size: 1.0em; font-weight: 500; } /* Medium for H4+ */
+.message-bubble .prose h5 { font-size: 0.9em; font-weight: 500; }
+.message-bubble .prose h6 { font-size: 0.85em; font-weight: 500; color: var(--color-text-secondary); }
+
+/* Horizontal Rule */
+.message-bubble .prose hr {
+  border-top-width: 1px;
+  border-color: var(--tw-prose-hr);
+  margin-top: 1.5em;
+  margin-bottom: 1.5em;
+}
+
+/* Images */
+.message-bubble .prose img {
+  margin-top: 1em;
+  margin-bottom: 1em;
+  max-width: 100%; /* Prevent overflow */
+  height: auto; /* Maintain aspect ratio */
+  border-radius: 4px; /* Optional rounding */
+  display: inline-block; /* Allow flowing with text if small */
+}
+
+/* Paragraphs - Adjust spacing between elements */
+.message-bubble .prose p {
+   margin-top: 0.75em;
+   margin-bottom: 0.75em;
+   line-height: 1.6; /* Improve readability */
+}
+.message-bubble .prose p:first-child { margin-top: 0; }
+.message-bubble .prose p:last-child { margin-bottom: 0; }
+
+/* Remove margin for elements immediately following each other */
+.message-bubble .prose > :first-child { margin-top: 0; }
+.message-bubble .prose > :last-child { margin-bottom: 0; }
+
+/* --- End Markdown Styling --- */
+
+/* Container */
+.message-editor-container {
+  position: relative; /* For positioning the format menu */
+  background-color: var(--color-surface); /* Or surface-alt */
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  /* Add other base styles like padding if needed */
+}
+
+/* Editable Div Styling */
+[contenteditable="true"].prose {
+  cursor: text;
+  line-height: 1.6;
+  /* Mimic input appearance */
+  -webkit-appearance: textfield;
+  -moz-appearance: textfield;
+  appearance: textfield;
+  color: var(--color-text);
+  overflow-x: hidden;
+}
+[contenteditable="true"].prose:focus {
+  outline: none; /* Handled by container ring */
+}
+
+/* Placeholder */
+[contenteditable="true"][data-placeholder]:empty:before {
+  content: attr(data-placeholder);
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+  display: block; /* For line-height */
+}
+
+/* Height Growth (managed by JS, but set max-height here) */
+[contenteditable="true"].prose {
+  max-height: 200px; /* Or your desired max height */
+  overflow-y: auto; /* Show scrollbar when max height is reached */
+}
+
+/* Highlight Formatting Menu */
+.format-menu {
+  background-color: #333; /* Dark background like Discord */
+  color: white;
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  display: flex;
+  gap: 4px;
+}
+.format-menu button {
+  background: none;
+  border: none;
+  color: #ccc;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font-weight: bold;
+  cursor: pointer;
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+.format-menu button:hover {
+  background-color: #444;
+  color: white;
+}
+.format-menu button:active {
+   background-color: #555;
+}
+.format-menu button[data-format="blockquote"] { font-style: italic; }
+.format-menu button[data-format="strikethrough"] { text-decoration: line-through; }
+.format-menu button[data-format="code"] { font-family: monospace; }
+.format-menu button[data-format="spoiler"] { /* Special indicator? */ }
+
+
+/* Inline Formatting Preview Styles (Applied by JS Hook) */
+.md-bold { font-weight: bold; }
+.md-italic { font-style: italic; }
+.md-strikethrough { text-decoration: line-through; }
+.md-code {
+  font-family: monospace;
+  background-color: rgba(0,0,0,0.08);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+.md-spoiler {
+  background-color: rgba(0,0,0,0.1); /* Slight highlight */
+  border-radius: 3px;
+  padding: 0 1px; /* Minimal padding */
+}
+
+/* Blockquote Style (Applied by JS Hook) */
+.md-blockquote {
+  margin-top: 0.2em;
+  margin-bottom: 0.2em;
+  padding-left: 0.8em;
+  border-left: 3px solid var(--color-border-accent);
+  color: var(--color-text-secondary);
+  /* Ensure blockquote doesn't inherit inline styles from parent */
+}
+.md-blockquote .md-bold,
+.md-blockquote .md-italic,
+.md-blockquote .md-strikethrough,
+.md-blockquote .md-code,
+.md-blockquote .md-spoiler {
+  /* Reset specific styles if needed, or let them apply */
+}
+
+
+/* Final Rendered Spoiler Style */
+.spoiler-text {
+  background-color: var(--color-text); /* Initially black */
+  color: var(--color-text); /* Text same as background */
+  border-radius: 3px;
+  padding: 0 3px;
+  cursor: pointer;
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+.spoiler-text.revealed {
+  background-color: transparent; /* Reveal background */
+  color: inherit; /* Inherit normal text color */
+  cursor: default;
+}

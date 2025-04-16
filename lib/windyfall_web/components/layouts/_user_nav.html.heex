@@ -1,0 +1,39 @@
+<nav class="relative z-20 px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center bg-[var(--color-surface)]/80 backdrop-blur-sm border-b border-[var(--color-border)]">
+  <a href="/" class="flex items-center gap-2 group">
+    <%!-- New SVG - Abstract Wind & Water --%>
+    <svg class="w-8 h-8 text-[var(--color-primary)] group-hover:text-[var(--color-primary-dark)] transition-colors" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M20 80 Q 50 90, 80 80 T 140 80" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>
+      <path d="M25 65 Q 50 75, 75 65 T 125 65" stroke="currentColor" stroke-width="7" stroke-linecap="round" opacity="0.7"/>
+      <path d="M30 50 Q 50 60, 70 50 T 110 50" stroke="currentColor" stroke-width="6" stroke-linecap="round" opacity="0.5"/>
+      <path d="M40 20 V 70" stroke="var(--color-accent)" stroke-width="7" stroke-linecap="round" />
+      <path d="M55 25 V 75" stroke="var(--color-accent)" stroke-width="6" stroke-linecap="round" opacity="0.8"/>
+      <path d="M70 30 V 80" stroke="var(--color-accent)" stroke-width="5" stroke-linecap="round" opacity="0.6"/>
+    </svg>
+    <span class="text-xl font-bold bg-gradient-to-r from-[var(--color-primary)] to-[var(--color-accent)] bg-clip-text text-transparent group-hover:opacity-80 transition-opacity">
+      Windyfall
+    </span>
+  </a>
+
+  <div class="flex items-center gap-4">
+    <%= if @current_user do %>
+      <.link navigate={~p"/users/settings"} class="flex items-center gap-2 group">
+        <img src={WindyfallWeb.CoreComponents.user_avatar(@current_user.profile_image)}
+             alt={WindyfallWeb.CoreComponents.user_alt(@current_user)}
+             class="w-8 h-8 rounded-full border-2 border-[var(--color-primary)] group-hover:opacity-80 transition-opacity" />
+        <span class="text-sm font-medium text-[var(--color-text)] hidden sm:inline group-hover:text-[var(--color-primary)] transition-colors">
+          <%= @current_user.display_name %>
+        </span>
+      </.link>
+      <.link navigate={~p"/users/log_out"} method="delete" class="text-sm font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-primary)] transition-colors">
+        Log out
+      </.link>
+    <% else %>
+      <.link navigate={~p"/users/register"} class="text-sm font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-primary)] transition-colors">
+        Register
+      </.link>
+      <.link navigate={~p"/users/log_in"} class="text-sm font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-primary)] transition-colors">
+        Log in
+      </.link>
+    <% end %>
+  </div>
+</nav>

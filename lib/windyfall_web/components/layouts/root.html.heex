@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full antialiased"> <!-- Added antialiased for potentially smoother fonts -->
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="csrf-token" content={get_csrf_token()}/>
+  <.live_title suffix=" · Windyfall">
+    <%= assigns[:page_title] || "Windyfall" %>
+  </.live_title>
+  <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"}/>
+  <script defer phx-track-static type="text/javascript" src={~p"/assets/app.js"}></script>
+  <!-- Optional: Add favicon links -->
+  <!-- <link rel="icon" href={~p"/favicon.ico"} sizes="any"/> -->
+  <!-- <link rel="icon" href={~p"/images/icon.svg"} type="image/svg+xml"/> -->
+</head>
+<!--
+Body gets the animated gradient + base font styles from app.css.
+Using flex flex-col and min-h-screen ensures the layout fills the viewport
+and the footer (if added) stays at the bottom.
+-->
+<body class="h-full min-h-screen flex flex-col bg-background">
+
+  <%# User Navigation - assumes it handles its own sticky/fixed positioning and background %>
+  <._user_nav {assigns}/>
+
+  <%# Main Content Wrapper
+      - flex-1: Takes up remaining vertical space between nav and footer.
+      - flex flex-col: Allows @inner_content to potentially grow/scroll.
+      - overflow-hidden: Prevents double scrollbars if @inner_content manages its own scroll.
+  %>
+  <main class="flex-1 flex flex-col">
+    <%# Flash messages rendered within the main area but before the primary content scroll container %>
+    <.flash_group flash={@flash} />
+
+    <%# Inner Content Container
+        - flex-1: Allows this container to grow and fill the main area.
+        - flex: Necessary for child elements (like ChatLive's columns) to use flex properties.
+        - overflow-y-auto: If the content *itself* (like GameLive) needs to scroll vertically without sidebars.
+                           ChatLive will likely manage overflow within its own columns.
+                           This might need adjustment based on GameLive's final layout.
+                           Consider removing overflow-y-auto here if ChatLive/GameLive *always*
+                           manage their internal scrolling perfectly.
+    %>
+    <div class="flex-1 flex flex-col overflow-y-auto">
+      <%# @inner_content renders the specific LiveView (ChatLive, GameLive, etc.) %>
+      <%# These LiveViews are responsible for their own internal layout (e.g., sidebars) %>
+      <%= @inner_content %>
+    </div>
+  </main>
+
+  <%# Optional Subtle Footer - Thematically light %>
+  <footer class="py-3 px-4 sm:px-6 lg:px-8 text-center text-xs text-[var(--color-text-tertiary)] border-t border-[var(--color-border)] bg-[var(--color-surface)]/30 backdrop-blur-sm">
+    © <%= Date.utc_today().year %> Windyfall. Flowing with conversation.
+    <%# You could add other links here if needed %>
+  </footer>
+
+  <%# Floating leaves effect is added via app.js %>
+
+  <%# Single Global Context Menu (Initially Hidden) %>
+  <div id="message-context-menu" style="display: none;">
+    <ul role="menu">
+      <%# Items will be dynamically shown/hidden via JS or LV based on context %>
+      <%# Example structure (JS will likely manipulate this, or LV renders conditionally) %>
+      <%#
+      <li role="menuitem"><button data-action="react">Add Reaction...</button></li>
+      <li role="menuitem"><button data-action="reply">Reply</button></li>
+      <li role="menuitem"><button data-action="edit" class="menu-item-edit">Edit Message</button></li>
+      <li role="menuitem"><button data-action="copy_text">Copy Text</button></li>
+      <li role="menuitem"><button data-action="copy_link" disabled>Copy Link</button></li>
+      <li role="menuitem"><button data-action="share" disabled>Share...</button></li>
+      <hr>
+      <li role="menuitem"><button data-action="delete" class="menu-item-delete text-red-600 hover:bg-red-50 hover:text-red-700">Delete Message</button></li>
+      <li role="menuitem"><button data-action="report" class="menu-item-report text-red-600 hover:bg-red-50 hover:text-red-700">Report Message</button></li>
+      %>
+    </ul>
+  </div>
+
+</body>
+</html>
