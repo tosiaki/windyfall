@@ -182,7 +182,8 @@ const SlateEditor = (props) => {
       formId,
       hiddenInputName = "new_message",
       autoFocus = false,
-      placeholder = "Enter your message..."
+      placeholder = "Enter your message...",
+      pushEvent
   } = props;
 
   // Create editor instance
@@ -219,14 +220,18 @@ const SlateEditor = (props) => {
   const updateHiddenInput = useCallback((newValue) => {
     const markdownString = serializeToMarkdown(newValue);
     const hiddenInput = hiddenInputRef.current;
+    let pushedEvent = false; // Flag to ensure we only push once
 
     if (hiddenInput) {
       hiddenInput.value = markdownString;
       // Dispatch an 'input' event so LiveView hook detects the change
       hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
+
+        } else {
+             console.warn("Hidden input not found for update:", uniqueId);
     }
     // Removed pushEvent call - handled by hidden input's event listener in hook
-  }, [hiddenInputRef]); // Dependencies
+  }, [hiddenInputRef, uniqueId, pushEvent, serializeToMarkdown]);
 
   // --- Decoration Logic (Identifies syntax for styling) ---
   const decorate = useCallback(([node, path]) => {
@@ -379,7 +384,7 @@ const SlateEditor = (props) => {
        console.error("Error getting selection rect:", error);
        if (showToolbar) setShowToolbar(false);
     }
-  }, [editor, updateHiddenInput, showToolbar]);
+  }, [editor, updateHiddenInput, showToolbar, setValue]);
 
 
   // --- TODO: Implement Toolbar Button Handlers ---
@@ -598,27 +603,46 @@ const SlateEditor = (props) => {
 
   // --- Initial value setting ---
   // Needs to run only once or when initialValue prop changes
-  useEffect(() => {
-      if (initialValueProp) {
-          const nodes = deserializeMarkdown(initialValueProp);
-          // Prevent infinite loops: Only update if the content differs significantly
-          // This simple check might not be perfect
-          if (JSON.stringify(value) !== JSON.stringify(nodes)) {
-                // Use Transforms.removeNodes and Transforms.insertNodes for safer update
-		 Transforms.removeNodes(editor, {
-		     at: { anchor: Editor.start(editor, []), focus: Editor.end(editor, []) },
-		     match: () => true, // Match all nodes
-		     mode: 'highest'
-		 });
-                Transforms.insertNodes(editor, nodes, { at: [0] }); // Insert deserialized nodes
-                setValue(nodes); // Sync React state (might be redundant if editor change triggers it)
-                editor.history = { undos: [], redos: [] };
-                Editor.normalize(editor, { force: true });
-                // Move cursor to end after initial load (optional)
-                Transforms.select(editor, Editor.end(editor, []));
-          }
-      }
-  }, [initialValueProp, editor, value]); // Rerun if initialValue changes
+    useEffect(() => {
+        // Only run if initialValueProp is provided (i.e., editing mode)
+        if (initialValueProp) {
+            const nodes = deserializeMarkdown(initialValueProp);
+            const nodesStr = JSON.stringify(nodes); // Stringify for comparison
+            const currentValueStr = JSON.stringify(value); // Stringify current state
+
+            // Check if the incoming prop value is DIFFERENT from the current state
+            if (nodesStr !== currentValueStr) {
+                console.log("InitialValueProp changed, resetting editor value.");
+
+                // Directly set the editor's content
+                // Use withoutNormalizing to prevent interference during reset
+                Editor.withoutNormalizing(editor, () => {
+                    // Set the children property directly (more reliable for full reset)
+                    editor.children = nodes;
+                    // Update the component's state variable to match
+                    setValue(nodes);
+                    // Reset the history stack
+                    editor.history = { undos: [], redos: [] };
+                    // Move selection to the end of the newly set content
+                    Transforms.select(editor, Editor.end(editor, []));
+                });
+
+                // Optional: Trigger normalization *after* the reset if needed,
+                // though setting children often handles basic structure.
+                // Editor.normalize(editor, { force: true });
+
+                // Force focus if autofocus is intended for editing
+                if (autoFocus) {
+                    ReactEditor.focus(editor);
+                }
+
+                 // IMPORTANT: Update the hidden input immediately after reset
+                 updateHiddenInput(nodes);
+            }
+        }
+        // This effect should ONLY run when initialValueProp changes.
+        // Do NOT include `value` or `editor` as dependencies here to avoid loops.
+    }, [initialValueProp, editor, autoFocus, updateHiddenInput]);
 
     const renderPlaceholder = useCallback(({ children, attributes }) => {
         // children = the placeholder text string
@@ -931,6 +955,7 @@ const isMarkActive = (editor, format) => {
 
 // --- Deserialization Example (assuming nested structure) ---
 const deserializeMarkdown = (markdown) => {
+	console.log("deserializing", markdown);
     if (!markdown) return initialEmptyValue;
     const lines = markdown.split('\n');
     const nodes = [];

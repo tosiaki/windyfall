@@ -341,20 +341,18 @@ defmodule WindyfallWeb.Chat.MessageComponent do
                               uniqueId: "edit-#{message.id}", # Pass unique ID for editing
                               pushEvent: "update_editor_content",
                               initialValue: @editing_content, # Pass current content
-                              pushEventTarget: @myself,
-                              formId: @id <> "-form"
+                              hiddenInputName: "content",
+                              formId: "edit-form-#{message.id}"
                             },
                             # Options Map (for DOM attributes)
                             id: "slate-editor-edit-#{message.id}",
                             phx_update: "ignore",
                           ) %>
-                       <%# Hidden input - name MUST match save_edit handler needs %>
-                       <input type="hidden" name="content" id={"edit-hidden-input-#{message.id}"} value={@editing_content} />
                     </div>
 
                     <div class="mt-2 flex gap-2 justify-end">
-                      <button type="button" phx-click="cancel_edit" class="text-xs ...">Cancel</button>
-                      <button type="submit" phx-disable-with="Saving..." class="text-xs ...">Save</button>
+                      <button type="button" phx-click="cancel_edit" class="text-xs text-gray-600 hover:text-gray-900">Cancel</button>
+                      <button type="submit" phx-disable-with="Saving..." class="text-xs text-blue-600 hover:text-blue-800 font-medium">Save</button>
                     </div>
                   </form>
                 <% else %>
