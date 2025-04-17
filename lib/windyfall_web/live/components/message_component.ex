@@ -916,11 +916,15 @@ defmodule WindyfallWeb.Chat.MessageComponent do
   end
 
   defp render_markdown_with_spoilers(markdown_text, target_component) do
-    # 1. Parse original Markdown with Earmark (escaping user HTML)
-    html_fragment = case Earmark.as_html(markdown_text, escape: true, smartypants: true) do
-                       {:ok, html, _} -> html
-                       {:error, html, _} -> html # Render partial on error
-                     end
+    # Parse Markdown with Earmark, adding the breaks: true option
+    html_fragment =
+      case Earmark.as_html(markdown_text, # Use original text
+                            escape: true,
+                            smartypants: true,
+                            breaks: true) do # <<< ADD THIS OPTION
+        {:ok, html, _} -> html
+        {:error, html, _} -> html # Render partial on error
+      end
 
     # 2. Replace ||...|| in the GENERATED HTML
     final_html = replace_spoilers_in_html(html_fragment, target_component)

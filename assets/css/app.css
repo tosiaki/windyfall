@@ -581,23 +581,36 @@ body {
   appearance: textfield;
   color: var(--color-text);
   overflow-x: hidden;
+  position: relative;
 }
 [contenteditable="true"].prose:focus {
   outline: none; /* Handled by container ring */
-}
-
-/* Placeholder */
-[contenteditable="true"][data-placeholder]:empty:before {
-  content: attr(data-placeholder);
-  color: var(--color-text-tertiary);
-  pointer-events: none;
-  display: block; /* For line-height */
 }
 
 /* Height Growth (managed by JS, but set max-height here) */
 [contenteditable="true"].prose {
   max-height: 200px; /* Or your desired max height */
   overflow-y: auto; /* Show scrollbar when max height is reached */
+}
+
+/* Style the custom placeholder span rendered by Slate's renderPlaceholder */
+.slate-placeholder-custom {
+  /* Ensure it uses absolute positioning relative to the Editable */
+  position: absolute;
+  /* Position it according to the Editable's padding (px-3 py-2 => 0.75rem, 0.5rem) */
+  top: 0.5rem;
+  left: 0.75rem;
+  /* Styling from Slate's default + theme */
+  color: var(--color-text-tertiary);
+  opacity: 0.7; /* Or adjust as needed */
+  pointer-events: none; /* Crucial */
+  user-select: none; /* Crucial */
+  /* Ensure it doesn't interfere with layout if text wraps weirdly */
+  display: inline-block; /* Or block if needed, but inline usually works */
+  max-width: calc(100% - 1.5rem); /* Prevent overflow if needed */
+  white-space: nowrap; /* Prevent wrapping */
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* Highlight Formatting Menu */

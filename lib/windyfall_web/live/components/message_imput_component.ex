@@ -26,8 +26,6 @@ defmodule WindyfallWeb.Chat.MessageInputComponent do
                     id: "slate-editor-#{@id}",
                     phx_update: "ignore",
                   ) %>
-               <%# Hidden input is still needed, name matches submit handler needs %>
-               <input type="hidden" name="new_message" id={@id <> "-hidden-input"} value="" />
             </div>
             <button
               type="submit"

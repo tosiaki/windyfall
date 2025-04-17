@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { createEditor, Text, Transforms, Editor, Range, Element, Node, Point, Path } from 'slate';
 import { Slate, Editable, withReact, ReactEditor, useSlateStatic, useSelected, useFocused } from 'slate-react';
 import { withHistory } from 'slate-history';
@@ -8,22 +9,58 @@ import 'prismjs/components/prism-css'; // Example: Add other languages if needed
 import 'prismjs/components/prism-javascript';
 import debounce from 'lodash.debounce'; // Use lodash debounce
 
-// Helper to check if the selection is currently inside a block of a specific type
-const isBlockActive = (editor, format) => {
-  const [match] = Editor.nodes(editor, {
-    match: n => n.type === format,
-  });
-  return !!match;
+const initialEmptyValue = [
+  {
+    type: 'paragraph',
+    children: [{ text: '' }],
+  },
+];
+
+const toggleBlock = (editor, format) => {
+  const isActive = isBlockActive(editor, format); // Check if already inside the target format
+
+  // --- Turning OFF the format ---
+  if (isActive) {
+    // Find the highest-level block of the target format containing the selection
+    Transforms.unwrapNodes(editor, {
+      match: n =>
+        !Editor.isEditor(n) &&
+        Element.isElement(n) &&
+        n['type'] === format,
+      // split: true // Might be needed if unwrapping creates adjacent blocks of same type
+    });
+    // After unwrapping, the nodes *might* have inherited the old type,
+    // explicitly set them back to paragraph.
+    Transforms.setNodes(editor, { type: 'paragraph' });
+
+  // --- Turning ON the format ---
+  } else {
+    // Ensure the node(s) being wrapped are standard blocks first (like paragraphs)
+    // This prevents trying to wrap things that shouldn't be (like list-items directly)
+    // Note: If selection spans multiple blocks, this might set all to paragraph first.
+    Transforms.setNodes(
+      editor,
+      { type: 'paragraph' },
+      // Match only blocks that AREN'T the target format already
+      // This prevents accidentally setting a blockquote's type to paragraph before wrapping
+      { match: n => Editor.isBlock(editor, n) && (!n['type'] || n['type'] !== format) }
+    );
+
+    // Now wrap the paragraph(s) in the target format block
+    const block = { type: format, children: [] };
+    Transforms.wrapNodes(editor, block);
+  }
 };
 
-// Helper to toggle block types (like blockquote)
-const toggleBlock = (editor, format) => {
-  const isActive = isBlockActive(editor, format);
-  Transforms.setNodes(
-    editor,
-    { type: isActive ? 'paragraph' : format }, // Toggle between paragraph and the target format
-    { match: n => Editor.isBlock(editor, n) }
-  );
+// --- isBlockActive can likely remain as previously revised ---
+const isBlockActive = (editor, format) => {
+  const { selection } = editor;
+  if (!selection) return false;
+  const [match] = Editor.nodes(editor, {
+    at: Editor.unhangRange(editor, selection),
+    match: n => !Editor.isEditor(n) && Element.isElement(n) && n['type'] === format,
+  });
+  return !!match;
 };
 
 // Helper to wrap selected text with Markdown syntax
@@ -137,30 +174,59 @@ const SYMBOLS = {
 };
 const MARKS = Object.keys(SYMBOLS);
 
-// --- Slate Initial Value ---
-const initialValue = [
-  {
-    type: 'paragraph',
-    children: [{ text: '' }],
-  },
-];
-
 // --- Component ---
 const SlateEditor = (props) => {
   const {
-      initialValue: initialMarkdown = '',
-      pushEvent, // Keep for potential future use or different components
-      pushEventTo,
-      pushEventTarget, // The PID or target selector for pushEventTo
-      uniqueId,
-      formId
+      initialValue: initialValueProp = '',
+      uniqueId = 'slate-editor',
+      formId,
+      hiddenInputName = "new_message",
+      autoFocus = false,
+      placeholder = "Enter your message..."
   } = props;
 
   // Create editor instance
   const editor = useMemo(() => withPlugins(withHistory(withReact(createEditor()))), []);
 
-  // State for Slate's value
-  const [value, setValue] = useState(() => deserializeMarkdown(initialMarkdown));
+    // Use initialEmptyValue if initialValueProp is truly empty
+    const [value, setValue] = useState(() => {
+        const deserialized = deserializeMarkdown(initialValueProp);
+        // Ensure it's never completely empty, always at least one paragraph
+        return deserialized && deserialized.length > 0 ? deserialized : initialEmptyValue;
+    });
+
+  // State for toolbar
+  const toolbarRef = useRef();
+  const [showToolbar, setShowToolbar] = useState(false);
+  const [toolbarPosition, setToolbarPosition] = useState({ top: -10000, left: -10000 });
+  const [portalContainer, setPortalContainer] = useState(null);
+
+  const hiddenInputRef = useRef(); // Ref for the hidden input
+
+    // --- Find portal container on mount ---
+    useEffect(() => {
+      // Find the portal root element after the component mounts
+      const container = document.getElementById('slate-toolbar-portal-root');
+      if (container) {
+        setPortalContainer(container);
+      } else {
+        console.error("Portal root '#slate-toolbar-portal-root' not found in the DOM.");
+      }
+      // No cleanup needed, the element should persist
+    }, []); // Run only once on mount
+
+  // Callback to update hidden input and potentially notify parent LV
+  const updateHiddenInput = useCallback((newValue) => {
+    const markdownString = serializeToMarkdown(newValue);
+    const hiddenInput = hiddenInputRef.current;
+
+    if (hiddenInput) {
+      hiddenInput.value = markdownString;
+      // Dispatch an 'input' event so LiveView hook detects the change
+      hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    // Removed pushEvent call - handled by hidden input's event listener in hook
+  }, [hiddenInputRef]); // Dependencies
 
   // --- Decoration Logic (Identifies syntax for styling) ---
   const decorate = useCallback(([node, path]) => {
@@ -194,7 +260,6 @@ const SlateEditor = (props) => {
         for (const token of tokens) {
             const length = getLength(token);
             const end = start + length;
-		console.log(token, "this is token");
 
             // If the token is not just a plain string, it has a type
             if (typeof token !== 'string') {
@@ -262,55 +327,59 @@ const SlateEditor = (props) => {
     return <span {...attributes}>{children}</span>;
   }, []);
 
-  // --- Element Rendering (For block elements like blockquotes) ---
-   const renderElement = useCallback(({ attributes, children, element }) => {
-       switch (element.type) {
-           case 'block-quote': // Matches type set in deserialize
-               return <blockquote className="md-blockquote" {...attributes}>{children}</blockquote>;
-           case 'paragraph': // Default paragraph
-           default:
-               // Use div instead of p for simpler line handling in contenteditable
-               return <div {...attributes}>{children}</div>;
-       }
-   }, []);
-
-  // --- Debounced Push Event ---
-  // Send raw markdown to LiveView only after a pause
-    const pushMarkdownUpdate = useMemo(
-        () =>
-            debounce((newValue) => {
-		    console.log("updating markdown value", newValue);
-                const markdown = serializeToMarkdown(newValue);
-                const payload = { editorId: uniqueId, markdown: markdown };
-		    console.log("markdown value", markdown);
-
-                // --- Update hidden input ALWAYS ---
-                const hiddenInputId = `${uniqueId}-hidden-input`; // Assuming convention
-                const hiddenInput = document.getElementById(hiddenInputId);
-                if (hiddenInput) {
-                    hiddenInput.value = markdown;
-                    // Dispatch 'input' event might be needed if anything relies on observing it
-                    hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
-                } else {
-                    console.warn("Hidden input not found for editor:", uniqueId, "Expected ID:", hiddenInputId);
-                }
-
-                // --- Push event ONLY if targeted (i.e., for editing) ---
-                if (pushEventTarget && pushEventTo) {
-                    // Use pushEventTo with the target provided by the parent LC
-                    pushEventTo(pushEventTarget, "update_editor_content", payload);
-                }
-                // No pushEvent needed for the non-targeted (new message) editor
-
-            }, 500), // Debounce time
-        [uniqueId, pushEventTo, pushEventTarget] // Dependencies
-    );
+  // Function to render elements (like paragraphs, blockquotes)
+  const renderElement = useCallback(({ attributes, children, element }) => {
+    switch (element.type) {
+      case 'block-quote':
+        // Use the existing md-blockquote class for styling consistency
+        return <blockquote {...attributes} className="md-blockquote">{children}</blockquote>;
+      default: // 'paragraph'
+        return <p {...attributes}>{children}</p>;
+    }
+  }, []);
 
   // --- onChange Handler ---
-  const handleChange = (newValue) => {
+  const handleChange = useCallback((newValue) => {
     setValue(newValue); // Update internal Slate state
-    pushMarkdownUpdate(newValue); // Trigger debounced push to LV
-  };
+    updateHiddenInput(newValue); // Update hidden input for LV
+
+    const { selection } = editor;
+    const toolbarEl = toolbarRef.current; 
+
+    // Logic to show/hide/position the toolbar
+    if (!selection || !ReactEditor.isFocused(editor) || Range.isCollapsed(selection) || Editor.string(editor, selection) === '' || !toolbarEl) {
+      if (showToolbar) {
+        setShowToolbar(false); // Hide if no selection, not focused, collapsed, or empty string selected
+      }
+      return;
+    }
+
+    try {
+      const domSelection = window.getSelection();
+      if (!domSelection || domSelection.rangeCount === 0) {
+         if (showToolbar) setShowToolbar(false);
+         return;
+      }
+      const domRange = domSelection.getRangeAt(0);
+      const rect = domRange.getBoundingClientRect();
+
+      // Calculate position relative to the window
+      let top = rect.top - toolbarEl.offsetHeight - 5; // Position above selection
+      let left = rect.left + (rect.width / 2) - (toolbarEl.offsetWidth / 2); // Center horizontally
+
+      // Basic boundary checks (adjust as needed)
+      top = Math.max(5, top); // Prevent going off top
+      left = Math.max(5, left); // Prevent going off left
+      left = Math.min(left, window.innerWidth - toolbarEl.offsetWidth - 5); // Prevent going off right
+
+      setToolbarPosition({ top, left });
+      if (!showToolbar) setShowToolbar(true);
+
+    } catch (error) {
+       console.error("Error getting selection rect:", error);
+       if (showToolbar) setShowToolbar(false);
+    }
+  }, [editor, updateHiddenInput, showToolbar]);
 
 
   // --- TODO: Implement Toolbar Button Handlers ---
@@ -335,21 +404,19 @@ const SlateEditor = (props) => {
 
 
     // --- KeyDown Handler ---
-    const handleKeyDown = (event) => {
+    const handleKeyDown = useCallback((event) => {
         const { selection } = editor;
 
         // --- Enter (alone): Submit Form ---
         if (!event.shiftKey && event.key === 'Enter') {
+            console.log("Handling Enter for submit");
             event.preventDefault(); // IMPORTANT: Prevent inserting newline
 
-            const parentForm = document.getElementById(props.formId);
-            const hiddenInputId = `${props.uniqueId}-hidden-input`;
+            const parentForm = document.getElementById(formId);
+            const hiddenInputId = `${uniqueId}-hidden-input`;
             const hiddenInput = document.getElementById(hiddenInputId);
 
             if (parentForm && hiddenInput) {
-                // 1. Flush any pending debounced updates (might be slightly old state)
-                pushMarkdownUpdate.flush();
-
                 // 2. Get the ABSOLUTELY current state and serialize it NOW
                 const currentRawMarkdown = serializeToMarkdown(editor.children); // Pass current editor state
 
@@ -368,8 +435,30 @@ const SlateEditor = (props) => {
                 console.log("Submitting form...");
                 parentForm.requestSubmit();
 
+                // 7. RESET EDITOR STATE
+                console.log("Resetting editor state after submit...");
+                // Use Transforms to clear content safely
+                Transforms.delete(editor, {
+                    at: {
+                        anchor: Editor.start(editor, []),
+                        focus: Editor.end(editor, []),
+                    },
+                });
+                // Ensure the editor contains at least the initial empty block
+                // (delete might leave it empty, insert ensures structure)
+                 Transforms.insertNodes(editor, initialEmptyValue, { at: [0] });
+                 // Select the start of the now empty editor
+                 Transforms.select(editor, Editor.start(editor, []));
+
+                // Also reset the React state variable to match
+                setValue(initialEmptyValue); // Use the constant
+
+                // Clear undo history after submitting
+                editor.history = { undos: [], redos: [] };
+                // --- *** END RESET *** ---
+
             } else {
-                if (!parentForm) console.warn("Submit failed: Could not find parent form:", props.formId);
+                if (!parentForm) console.warn("Submit failed: Could not find parent form:", formId);
                 if (!hiddenInput) console.warn("Submit failed: Could not find hidden input:", hiddenInputId);
             }
             return; // Handled Enter
@@ -378,87 +467,112 @@ const SlateEditor = (props) => {
 
         // --- Shift + Enter: Insert Newline / Exit Blockquote ---
         if (event.shiftKey && event.key === 'Enter') {
-            event.preventDefault();
+            event.preventDefault(); // Always prevent default Shift+Enter behavior
 
-            const parentBlockEntry = Editor.above(editor, { /* ... */ });
-            if (!parentBlockEntry) { editor.insertText('\n'); return; }
-            const [parentBlockNode, parentBlockPath] = parentBlockEntry;
+            if (!selection) return;
 
-            let isInBlockquote = false;
-            let isDirectlyInBlockquote = false; // Is parentBlock the quote itself?
-            let blockquotePath = null;
+            // Check if we are inside a blockquote
+            const [blockquoteMatch] = Editor.nodes(editor, {
+                match: n => Element.isElement(n) && n['type'] === 'block-quote',
+                mode: 'highest',
+            });
 
-            if (parentBlockNode.type === 'block-quote') {
-                isInBlockquote = true;
-                isDirectlyInBlockquote = true;
-                blockquotePath = parentBlockPath;
+            if (blockquoteMatch) {
+                // --- Inside a Blockquote ---
+
+                // Find the current lowest block element (likely paragraph)
+                const [currentBlockEntry] = Editor.nodes(editor, {
+                    match: n => Element.isElement(n) && Editor.isBlock(editor, n),
+                    mode: 'lowest',
+                });
+
+                if (currentBlockEntry) {
+                    const [currentNode, currentPath] = currentBlockEntry;
+                    const currentText = Node.string(currentNode);
+
+                    // Check if the current line (lowest block) is empty
+                    if (currentText.trim() === '') {
+                        // Current line is empty. Now check the previous sibling.
+                        let prevNodeIsEmpty = false;
+                        let prevPath = null;
+
+                        try {
+                             // Attempt to get the previous path
+                             prevPath = Path.previous(currentPath);
+                             // Try to get the node at the previous path
+                             const [prevNode, _] = Editor.node(editor, prevPath);
+                             // Check if the previous node is an element and is empty
+                             if (Element.isElement(prevNode) && Node.string(prevNode).trim() === '') {
+                                 prevNodeIsEmpty = true;
+                             }
+                        } catch (e) {
+                             // Error means path was invalid (e.g., first child) or node didn't exist.
+                             // prevNodeIsEmpty remains false.
+                             console.log("Shift+Enter: No valid previous empty sibling found.");
+                        }
+
+                        // --- EXIT Condition Met (Double Empty Line) ---
+                        if (prevNodeIsEmpty && prevPath) { // Ensure prevPath is not null
+                            console.log("Shift+Enter on second empty line: Exiting blockquote");
+                            // Use withoutNormalizing to perform multiple transforms atomically
+                            Editor.withoutNormalizing(editor, () => {
+                                // Convert both nodes back to paragraph first
+                                Transforms.setNodes(editor, { type: 'paragraph' }, { at: currentPath });
+                                Transforms.setNodes(editor, { type: 'paragraph' }, { at: prevPath }); // Use the valid prevPath
+
+                                // Lift the CURRENT node first (as its path changes less immediately)
+                                Transforms.liftNodes(editor, { at: currentPath });
+                                // Then lift the PREVIOUS node. Its path relative to the original parent
+                                // should still be okay even after the sibling was lifted.
+                                Transforms.liftNodes(editor, { at: prevPath });
+                            });
+                        }
+                        // --- Insert Newline (Current line empty, BUT previous wasn't OR it's the first line) ---
+                        else {
+                            console.log("Shift+Enter on first empty line or after non-empty: Splitting node within quote");
+                            // Split the current empty paragraph to create a new one below it
+                            Transforms.splitNodes(editor, {
+                                match: n => Element.isElement(n) && n.type === 'paragraph',
+                                always: true,
+                            });
+                            // Ensure the new node remains a paragraph (splitNodes usually inherits type)
+                            // Transforms.setNodes(editor, { type: 'paragraph' }); // Probably redundant
+                        }
+
+                    }
+                    // --- Insert Newline (Current line is NOT empty) ---
+                    else {
+                        console.log("Shift+Enter on non-empty line: Splitting node within quote");
+                        // Split the current paragraph containing text
+                        Transforms.splitNodes(editor, {
+                            match: n => Element.isElement(n) && n.type === 'paragraph',
+                            always: true, // Split even at start/end of the paragraph
+                        });
+                        // Ensure the new node remains a paragraph
+                        // Transforms.setNodes(editor, { type: 'paragraph' }); // Probably redundant
+                    }
+
+                } else {
+                    // Edge case: Selection is in blockquote but not within a recognizable block?
+                    // Insert a newline character as a fallback.
+                    console.log("Shift+Enter: Fallback newline insertion within quote");
+                    editor.insertText('\n');
+                }
+
             } else {
-                const ancestorQuoteEntry = Editor.above(editor, { /* ... */ });
-                if (ancestorQuoteEntry) {
-                    isInBlockquote = true;
-                    blockquotePath = ancestorQuoteEntry[1];
-                    // isDirectlyInBlockquote remains false
-                }
+                // --- Not inside a blockquote ---
+                console.log("Shift+Enter outside quote: Splitting node");
+                // Use splitNodes to create a structural break, not just '\n'
+                Transforms.splitNodes(editor, {
+                    // Split the current block (likely paragraph)
+                    match: n => Element.isElement(n) && Editor.isBlock(editor, n),
+                    always: true, // Split even at start/end
+                });
+                 // Optionally ensure the new node is a paragraph if splitNodes doesn't guarantee it
+                 // Transforms.setNodes(editor, { type: 'paragraph' });
             }
-
-            if (isInBlockquote) {
-                // --- Inside Blockquote Context ---
-                const currentLineIsEmpty = Editor.string(editor, parentBlockPath).trim() === '';
-
-                // Exit Condition (Only if in a nested block that's empty)
-                if (!isDirectlyInBlockquote && currentLineIsEmpty) {
-                    console.log("Shift+Enter on empty nested line in quote: Exiting");
-                    Transforms.setNodes(editor, { type: 'paragraph' }, { at: parentBlockPath });
-                    try { Transforms.liftNodes(editor, { at: parentBlockPath }); } catch(e){}
-
-                }
-                // Initial Line Break (Cursor is directly in Blockquote with just text)
-                else if (isDirectlyInBlockquote) {
-                     console.log("Shift+Enter directly in blockquote: Wrapping and inserting paragraph");
-                      // We need to wrap the existing text in a paragraph,
-                      // then insert another paragraph after it.
-
-                      // 1. Wrap current selection's block (the blockquote) content with a paragraph
-                      // This might wrap the entire text node content
-                      Transforms.wrapNodes(editor,
-                           { type: 'paragraph', children: [] },
-                           { at: parentBlockPath, match: n => Text.isText(n) } // Match text nodes inside
-                           // Careful: This might wrap multiple times if called repeatedly?
-                           // Alternative: Get all text, remove nodes, insert single paragraph
-                      );
-
-                      // 2. Find the path to the newly wrapped paragraph (should be the first child)
-                      const firstChildPath = [...parentBlockPath, 0];
-
-                      // 3. Insert a new paragraph AFTER the wrapped one
-                      Transforms.insertNodes(editor,
-                          { type: 'paragraph', children: [{ text: '' }] },
-                          { at: Path.next(firstChildPath), select: true } // Insert after and select
-                      );
-
-
-                }
-                // Subsequent Line Break (Cursor is already in a nested paragraph)
-                else {
-                     console.log("Shift+Enter in nested paragraph: Splitting node");
-                     // Split the current paragraph node
-                     Transforms.splitNodes(editor, {
-                          at: selection, // Split at cursor
-                          match: n => Element.isElement(n) && n.type === 'paragraph', // Match paragraph
-                          always: true
-                     });
-                     // Ensure the new node is a paragraph (splitNodes might inherit type?)
-                     // It should already be a paragraph if we split a paragraph.
-                     // Transforms.setNodes(editor, { type: 'paragraph' }, { mode: 'lowest' }); // Ensure new node is para
-                }
-            } else {
-                // --- Not inside blockquote: Standard Shift+Enter ---
-                console.log("Shift+Enter outside quote: Inserting newline text");
-                editor.insertText('\n');
-            }
-
             return; // Handled Shift+Enter
-        }
+        } // End Shift+Enter check
 
         // --- Handle Ctrl/Cmd + B/I (keep existing) ---
         if (!event.shiftKey && (event.ctrlKey || event.metaKey)) {
@@ -479,19 +593,23 @@ const SlateEditor = (props) => {
         }
 
         // Default keydown handling will be done by Editable if we don't return
-    };
+    }, [editor, formId, uniqueId, updateHiddenInput, handleFormat, setValue]);;
 
 
   // --- Initial value setting ---
-  // Needs to run only once or when initialMarkdown prop changes
+  // Needs to run only once or when initialValue prop changes
   useEffect(() => {
-      if (initialMarkdown) {
-          const nodes = deserializeMarkdown(initialMarkdown);
+      if (initialValueProp) {
+          const nodes = deserializeMarkdown(initialValueProp);
           // Prevent infinite loops: Only update if the content differs significantly
           // This simple check might not be perfect
           if (JSON.stringify(value) !== JSON.stringify(nodes)) {
                 // Use Transforms.removeNodes and Transforms.insertNodes for safer update
-                Transforms.removeNodes(editor, { at: [0] }); // Remove placeholder/old content
+		 Transforms.removeNodes(editor, {
+		     at: { anchor: Editor.start(editor, []), focus: Editor.end(editor, []) },
+		     match: () => true, // Match all nodes
+		     mode: 'highest'
+		 });
                 Transforms.insertNodes(editor, nodes, { at: [0] }); // Insert deserialized nodes
                 setValue(nodes); // Sync React state (might be redundant if editor change triggers it)
                 editor.history = { undos: [], redos: [] };
@@ -500,24 +618,74 @@ const SlateEditor = (props) => {
                 Transforms.select(editor, Editor.end(editor, []));
           }
       }
-  }, [initialMarkdown, editor]); // Rerun if initialMarkdown changes
+  }, [initialValueProp, editor, value]); // Rerun if initialValue changes
 
+    const renderPlaceholder = useCallback(({ children, attributes }) => {
+        // children = the placeholder text string
+        // attributes = object containing { 'data-slate-placeholder': true, style: {...}, contentEditable: false, ref: ... }
+
+        // Clone the style object to modify it safely
+        const style = { ...attributes.style };
+
+        // Remove Slate's default 'top' positioning
+        delete style.top;
+        // We can also remove 'left' if we set it via CSS class, otherwise keep Slate's default 'left: 0'.
+        // delete style.left;
+
+        // Apply position via CSS class instead of inline style['top']/['left']
+        return (
+            <span
+                {...attributes} // Spread the original attributes (includes data-*, contentEditable, ref)
+                style={style}   // Spread the modified style object (without 'top')
+                className="slate-placeholder-custom" // Add our custom class
+            >
+                {children}
+            </span>
+        );
+    }, []); // No dependencies needed for this specific implementation
+
+    const toolbarJsx = (
+        <div
+            ref={toolbarRef} // Attach ref here
+            className="format-menu"
+            style={{
+                position: 'fixed', // Use fixed position relative to viewport
+                top: `${toolbarPosition.top}px`,
+                left: `${toolbarPosition.left}px`,
+                zIndex: 1000, // High z-index to ensure visibility
+                visibility: showToolbar ? 'visible' : 'hidden',
+                opacity: showToolbar ? 1 : 0,
+                transition: 'opacity 0.1s ease-out, visibility 0.1s ease-out',
+                pointerEvents: showToolbar ? 'auto' : 'none',
+            }}
+            onMouseDown={(e) => e.preventDefault()} // Prevent focus loss
+        >
+            <FormatButton format="bold" editor={editor}><b>B</b></FormatButton>
+            <FormatButton format="italic" editor={editor}><i>I</i></FormatButton>
+            <FormatButton format="strikethrough" editor={editor}><s>S</s></FormatButton>
+            <FormatButton format="block-quote" editor={editor}>“</FormatButton>
+            <FormatButton format="code" editor={editor}>{'</>'}</FormatButton>
+            <FormatButton format="spoiler" editor={editor}>||</FormatButton>
+        </div>
+    );
 
   return (
     // Provide the editor object and initial value to the Slate component.
     <Slate editor={editor} initialValue={value} onChange={handleChange}>
-       {/* TODO: Add Toolbar here later */}
+	  {portalContainer && createPortal(toolbarJsx, portalContainer)}
       <Editable
         renderElement={renderElement}
         renderLeaf={renderLeaf}
         decorate={decorate} // Apply decorations
-        placeholder="Type your message..."
+	placeholder={placeholder}
+	renderPlaceholder={renderPlaceholder}
         spellCheck
-        autoFocus={props.autoFocus}
+        autoFocus={autoFocus}
 	onKeyDown={handleKeyDown}
-        className="prose prose-sm max-w-none p-2 min-h-[40px] max-h-[200px] overflow-y-auto focus:outline-none" // Match CSS
-        id={`slate-editable-${uniqueId}`} // Unique ID for editable area if needed
+        className="prose message-editor-contenteditable min-h-[40px] max-h-[200px] overflow-y-auto px-3 py-2 focus:outline-none" // Match CSS
+        id={`slate-editable-${uniqueId || 'editor'}`} // Unique ID for editable area if needed
       />
+      <input type="hidden" name={props.hiddenInputName || "new_message"} ref={hiddenInputRef} id={`${uniqueId || 'editor'}-hidden-input`} />
     </Slate>
   );
 };
@@ -530,35 +698,65 @@ const withPlugins = (editor) => {
     editor.insertText = text => {
         const { selection } = editor;
 
-        // Handle '> ' at the start of a line to convert to blockquote
+        // Handle '> ' at the start of a *visual line* to convert to blockquote
         if (text === ' ' && selection && Range.isCollapsed(selection)) {
             const { anchor } = selection;
-            const block = Editor.above(editor, {
+            const blockEntry = Editor.above(editor, {
                 match: n => Element.isElement(n) && Editor.isBlock(editor, n),
             });
 
-            if (block) {
-                const [blockNode, blockPath] = block;
-                const start = Editor.start(editor, blockPath);
-                const range = { anchor, focus: start };
-                const beforeText = Editor.string(editor, range);
+            if (blockEntry) {
+                const [blockNode, blockPath] = blockEntry;
+                const blockStart = Editor.start(editor, blockPath);
+                // Range from block start to current cursor position
+                const rangeBefore = { anchor: blockStart, focus: anchor };
+                const textBefore = Editor.string(editor, rangeBefore);
 
-                // Check if the block is a paragraph and the line starts with >
-                if (blockNode.type === 'paragraph' && beforeText === '>') {
-                    Transforms.select(editor, range); // Select '>'
-                    Transforms.delete(editor);      // Delete it
-                    Transforms.setNodes(        // Convert block to blockquote
-                        editor,
-                        { type: 'block-quote' },
-                        { at: blockPath }       // Apply to the found block path
-                    );
+                // Find the start of the current visual line within the block's text
+                const lineStartIndex = textBefore.lastIndexOf('\n') + 1; // Handles start of block correctly
+                const textOnCurrentLineBeforeCursor = textBefore.substring(lineStartIndex);
+
+                // Check if the *current line* starts with exactly '>'
+                if (blockNode.type === 'paragraph' && textOnCurrentLineBeforeCursor === '>') {
+                    // Range covering only the '>' character
+                    const rangeToDelete = {
+                        anchor: Editor.before(editor, anchor, { unit: 'character' }), // Point before the cursor (where '>' is)
+                        focus: anchor // Point at the cursor
+                    };
+
+                    // Perform transformations atomically
+                    Editor.withoutNormalizing(editor, () => {
+                         Transforms.delete(editor, { at: rangeToDelete }); // Delete the '>'
+                         Transforms.setNodes(editor, // Convert block to blockquote
+                           { type: 'block-quote' },
+                           { at: blockPath } // Apply to the whole block path
+                         );
+			    console.log("set the node to block-quote")
+                         // Normalization will handle wrapping content in a paragraph later
+
+                        try {
+                            // Check the PREVIOUS sibling of the newly converted blockquote
+                            const prevPath = Path.previous(blockPath);
+                            const [prevNode, _] = Editor.node(editor, prevPath);
+
+                            // If the previous sibling is also a blockquote, merge the current one INTO it.
+                            // Note: Merging `blockPath` into `prevPath`
+                            if (Element.isElement(prevNode) && prevNode.type === 'block-quote') {
+                                console.log("Merging new blockquote (from '>') into previous one.");
+                                Transforms.mergeNodes(editor, { at: blockPath });
+                                // Normalization will run after this `withoutNormalizing` block anyway
+                            }
+                        } catch (e) {
+                            // Error likely means no previous sibling or it wasn't a blockquote. Ignore.
+                        }
+                    });
                     return; // Don't insert the space
                 }
             }
         }
 
         insertText(text); // Default behavior otherwise
-    };
+    }; // End insertText override
 
     editor.deleteBackward = unit => {
         const { selection } = editor;
@@ -636,28 +834,74 @@ const withPlugins = (editor) => {
     }; // End deleteBackward
 
 
-    // Helps maintain a consistent structure, e.g., ensuring blockquotes
-    // only contain block-level elements like paragraphs (or our divs).
+    // --- Enhanced normalizeNode ---
     editor.normalizeNode = entry => {
-         const [node, path] = entry;
+        const [node, path] = entry;
 
-        // Rule 1: Ensure blockquote children are block elements
+        // --- Rule 1: Ensure blockquote children are block elements ---
         if (Element.isElement(node) && node.type === 'block-quote') {
-            let modified = false; // Track if we changed anything in this rule pass
+            let wrappedChildren = false; // Flag to prevent infinite loops if wrap fails
             for (const [child, childPath] of Node.children(editor, path)) {
-                if (!Editor.isBlock(editor, child)) {
-                     console.warn("Normalizing: Wrapping inline text in blockquote with paragraph", child);
-                     Transforms.wrapNodes(editor, { type: 'paragraph', children: child.children || [{text: child.text || ''}] }, { at: childPath });
-                     modified = true; // We modified, so normalization needs to re-run
-                     // Don't break, check all children in one go if possible? Slate might rerun anyway.
+                // If a direct child is a Text node (or anything not a block)
+                if (Text.isText(child) || !Editor.isBlock(editor, child)) {
+                    console.warn("Normalizing: Wrapping non-block child in blockquote with paragraph", child);
+                    // Wrap this specific node
+                    Transforms.wrapNodes(
+                        editor,
+                        { type: 'paragraph', children: [] }, // Wrap with a paragraph
+                        { at: childPath }                     // Target the specific child path
+                    );
+                    wrappedChildren = true; // Indicate a change was made
+                    // Important: Return *after* finding the first invalid child and wrapping it.
+                    // Slate's normalization will re-run until the structure is valid.
+                    // Trying to fix multiple invalid children in one pass can be complex.
+                    return;
                 }
             }
-            if (modified) return; // Return early if we modified, let Slate re-normalize
+             // If we looped through all children and didn't need to wrap, proceed.
         }
-        // ... other normalization rules ...
 
-        normalizeNode(entry); // Call original
-     };
+        // --- Rule 2: Ensure top-level editor children are blocks ---
+        // (Optional but good practice)
+        if (Editor.isEditor(node)) {
+            for (const [child, childPath] of Node.children(editor, path)) {
+                if (!Editor.isBlock(editor, child)) {
+                     console.warn("Normalizing: Wrapping top-level non-block child with paragraph", child);
+                     Transforms.wrapNodes(editor, { type: 'paragraph', children: [] }, { at: childPath });
+                     return; // Re-normalize after change
+                }
+            }
+        }
+
+        // --- Rule 3: Merge adjacent blockquotes ---
+        // We only need to check elements, not text nodes or the editor root
+        if (Element.isElement(node) && node.type === 'block-quote') {
+            try {
+                // Get the path to the *next* sibling node
+                const nextPath = Path.next(path);
+                // Retrieve the node at the next path. This will error if path is invalid/out of bounds.
+                const [nextNode, _] = Editor.node(editor, nextPath);
+
+                // Check if the next sibling exists and is also a blockquote
+                if (Element.isElement(nextNode) && nextNode.type === 'block-quote') {
+                    console.log("Normalizing: Merging adjacent blockquotes at path", path);
+                    // Merge the `nextNode` into the `node` at `path`.
+                    // The `nextNode` will be removed after its children are moved.
+                    Transforms.mergeNodes(editor, { at: nextPath });
+                    // Return early because the structure changed significantly, need to re-run normalization.
+                    return;
+                }
+            } catch (e) {
+                // Error likely means no next sibling exists (Path.next was out of bounds
+                // or Editor.node failed), which is fine. We just don't merge.
+                // console.log("No next sibling blockquote to merge for path", path);
+            }
+        } // End Rule 3 check
+
+
+        // Call the original normalizeNode function for other rules or default behavior
+        normalizeNode(entry);
+    }; // End normalizeNode override
 
     return editor;
 };
@@ -687,7 +931,7 @@ const isMarkActive = (editor, format) => {
 
 // --- Deserialization Example (assuming nested structure) ---
 const deserializeMarkdown = (markdown) => {
-    if (!markdown) return initialValue;
+    if (!markdown) return initialEmptyValue;
     const lines = markdown.split('\n');
     const nodes = [];
     let currentBlockquoteChildren = null;
@@ -712,7 +956,7 @@ const deserializeMarkdown = (markdown) => {
     if (currentBlockquoteChildren !== null) {
         nodes.push({ type: 'block-quote', children: currentBlockquoteChildren });
     }
-    return nodes.length > 0 ? nodes : initialValue;
+    return nodes.length > 0 ? nodes : initialEmptyValue;
 };
 
 // --- Serialization Example (assuming nested structure) ---
