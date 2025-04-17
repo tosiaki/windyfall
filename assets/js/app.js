@@ -1187,7 +1187,165 @@ window.addEventListener("js:toggle_spoiler_class", event => {
     }
 });
 
-console.log("change succeded 49")
+// --- Image Gallery Logic ---
+let galleryOverlay = null;
+let galleryImage = null;
+let galleryImageAlt = null;
+let galleryPrevButton = null;
+let galleryNextButton = null;
+let galleryCloseButton = null;
+
+let currentGalleryImages = [];
+let currentGalleryIndex = -1;
+let currentGalleryId = null; // ID of the message gallery being viewed
+
+function initializeGallery() {
+    galleryOverlay = document.getElementById('image-gallery-overlay');
+    galleryImage = document.getElementById('gallery-image');
+    galleryImageAlt = document.getElementById('gallery-image-alt'); // For screen reader text
+    galleryPrevButton = document.getElementById('gallery-prev');
+    galleryNextButton = document.getElementById('gallery-next');
+    galleryCloseButton = document.getElementById('gallery-close');
+
+    if (!galleryOverlay || !galleryImage || !galleryPrevButton || !galleryNextButton || !galleryCloseButton) {
+        console.error("Gallery elements not found!");
+        return;
+    }
+
+    // --- Event Listeners ---
+
+    // Delegated listener for opening the gallery
+    document.body.addEventListener('click', (event) => {
+        const trigger = event.target.closest('[data-gallery-trigger]');
+        if (trigger) {
+            event.preventDefault();
+            openGallery(trigger);
+        }
+    });
+
+    // Close button
+    galleryCloseButton.addEventListener('click', closeGallery);
+
+    // Previous/Next buttons
+    galleryPrevButton.addEventListener('click', () => navigateGallery(-1));
+    galleryNextButton.addEventListener('click', () => navigateGallery(1));
+
+    // Close on overlay click (but not on image/buttons)
+    galleryOverlay.addEventListener('click', (event) => {
+        if (event.target === galleryOverlay) { // Only close if clicking the backdrop itself
+            closeGallery();
+        }
+    });
+
+    // Keyboard navigation (added when gallery opens)
+}
+
+function openGallery(triggerElement) {
+    const galleryDataId = triggerElement.dataset.galleryId;
+    const startIndex = parseInt(triggerElement.dataset.imageIndex, 10);
+    const galleryContainer = document.getElementById(galleryDataId);
+
+    if (!galleryContainer) {
+        console.error(`Gallery data container #${galleryDataId} not found.`);
+        return;
+    }
+
+    try {
+        const imagesData = JSON.parse(galleryContainer.dataset.galleryImages || '[]');
+        if (!Array.isArray(imagesData) || imagesData.length === 0) {
+            console.error('No valid image data found for gallery:', galleryDataId);
+            return;
+        }
+
+        currentGalleryImages = imagesData;
+        currentGalleryId = galleryDataId; // Store which gallery is open
+
+        // Ensure startIndex is valid
+        const validStartIndex = Math.max(0, Math.min(startIndex, currentGalleryImages.length - 1));
+
+        showImage(validStartIndex); // Show the clicked image
+
+        galleryOverlay.classList.remove('hidden'); // Show overlay
+        document.body.classList.add('gallery-active'); // Prevent body scroll
+        document.addEventListener('keydown', handleGalleryKeydown); // Add keyboard listener
+
+    } catch (e) {
+        console.error("Failed to parse gallery data:", e);
+    }
+}
+
+function showImage(index) {
+    if (index < 0 || index >= currentGalleryImages.length) {
+        console.warn("Invalid image index requested:", index);
+        return;
+    }
+
+    currentGalleryIndex = index;
+    const imageData = currentGalleryImages[index];
+
+    galleryImage.src = imageData.web_path;
+    galleryImage.alt = imageData.filename || 'Gallery image'; // Use filename for alt text
+    galleryImageAlt.textContent = galleryImage.alt; // Update hidden text for screen readers
+
+    // Update button states
+    galleryPrevButton.disabled = index === 0;
+    galleryNextButton.disabled = index === currentGalleryImages.length - 1;
+}
+
+function navigateGallery(direction) {
+    const newIndex = currentGalleryIndex + direction;
+    // Check bounds before showing
+    if (newIndex >= 0 && newIndex < currentGalleryImages.length) {
+        showImage(newIndex);
+    }
+}
+
+function closeGallery() {
+    if (!galleryOverlay) return; // Guard against errors if not initialized
+
+    galleryOverlay.classList.add('hidden'); // Hide overlay
+    document.body.classList.remove('gallery-active'); // Restore body scroll
+    document.removeEventListener('keydown', handleGalleryKeydown); // Remove listener
+
+    // Reset state
+    currentGalleryImages = [];
+    currentGalleryIndex = -1;
+    currentGalleryId = null;
+    galleryImage.src = ""; // Clear image source
+    galleryImage.alt = "";
+    galleryImageAlt.textContent = "";
+}
+
+function handleGalleryKeydown(event) {
+    if (currentGalleryImages.length === 0) return; // Gallery not active
+
+    switch (event.key) {
+        case 'ArrowLeft':
+            event.preventDefault();
+            navigateGallery(-1);
+            break;
+        case 'ArrowRight':
+            event.preventDefault();
+            navigateGallery(1);
+            break;
+        case 'Escape':
+            event.preventDefault();
+            closeGallery();
+            break;
+    }
+}
+
+// Initialize gallery logic once the DOM is ready
+// We might need to wait for LiveView connection or use DOMContentLoaded
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initializeGallery);
+} else {
+  initializeGallery(); // DOM is already ready
+}
+
+// --- End Image Gallery Logic ---
+
+console.log("change succeded 50")
 // Listener for custom clipboard event pushed from LiveView (if copy logic stays in LV)
 // window.addEventListener("clipboard-copy", event => {
 //   if (event.detail.content) {

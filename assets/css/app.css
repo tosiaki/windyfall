@@ -695,3 +695,128 @@ body {
   color: inherit; /* Inherit normal text color */
   cursor: default;
 }
+
+/* --- Image Gallery Styles --- */
+#image-gallery-overlay {
+  /* Base styles are set inline via classes in root.html.heex */
+  /* Add transitions for smoother appearance */
+  transition: opacity 0.2s ease-in-out, visibility 0.2s ease-in-out;
+}
+
+#image-gallery-overlay.hidden {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Style for body when gallery is active */
+body.gallery-active {
+  overflow: hidden; /* Prevent background scroll */
+}
+
+/* Navigation Arrows */
+.gallery-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background-color: rgba(0, 0, 0, 0.3);
+  color: white;
+  border: none;
+  padding: 0.75rem; /* p-3 */
+  border-radius: 9999px; /* rounded-full */
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  opacity: 0.7;
+}
+
+.gallery-nav:hover {
+  background-color: rgba(0, 0, 0, 0.5);
+  opacity: 1;
+}
+
+.gallery-nav.prev {
+  left: 1rem; /* left-4 */
+}
+
+.gallery-nav.next {
+  right: 1rem; /* right-4 */
+}
+
+.gallery-nav:disabled {
+  opacity: 0.2;
+  cursor: not-allowed;
+}
+
+/* Close button already styled inline */
+#gallery-close {
+    /* Base styles set inline */
+    transition: background-color 0.15s ease;
+}
+#gallery-close:hover {
+     background-color: rgba(0, 0, 0, 0.5);
+}
+
+/* Style for the image itself */
+#gallery-image {
+    /* Add a subtle background for transparency/loading */
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 4px; /* Optional subtle rounding */
+}
+
+/* --- Text Viewer Styles --- */
+#text-viewer-overlay {
+  /* Base styles set inline via classes */
+  /* Add transitions if desired */
+  transition: opacity 0.2s ease-in-out;
+}
+
+/* Hide when not active (can use assigns or add/remove hidden class) */
+/* This assumes conditional rendering in HEEx, no hidden class needed */
+
+#text-viewer-overlay pre {
+  /* Ensure long lines wrap correctly */
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+#text-viewer-overlay code {
+    /* Reset any potential global code styles if needed */
+    background-color: transparent;
+    padding: 0;
+    border-radius: 0;
+    color: inherit;
+}
+
+/* Navigation Arrows for Text Viewer */
+.text-viewer-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  background-color: rgba(255, 255, 255, 0.1);
+  color: white;
+  border: none;
+  padding: 0.75rem;
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  opacity: 0.7;
+  z-index: 10; /* Ensure above the pre/code */
+}
+
+.text-viewer-nav:hover {
+  background-color: rgba(255, 255, 255, 0.2);
+  opacity: 1;
+}
+
+.text-viewer-nav.prev {
+  left: 1rem;
+}
+
+.text-viewer-nav.next {
+  right: 1rem;
+}
+
+.text-viewer-nav:disabled {
+  opacity: 0.2;
+  cursor: not-allowed;
+}

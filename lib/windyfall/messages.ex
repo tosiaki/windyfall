@@ -13,6 +13,7 @@ defmodule Windyfall.Messages do
   alias Windyfall.Messages.Share
   alias Windyfall.Messages.Topic
   alias Windyfall.Messages.Bookmark
+  alias Windyfall.Messages.Attachment
 
   use WindyfallWeb, :verified_routes
 
@@ -416,6 +417,7 @@ defmodule Windyfall.Messages do
         # --- Also preload the user of the message being replied to ---
         preload: [
           :user,
+          :attachments,
           reactions: [:user], # Preload reactions and their users
           replying_to: [:user] # Preload parent message and its user
         ]
@@ -437,6 +439,7 @@ defmodule Windyfall.Messages do
         where(query_base, [m], m.id < ^last_id)
       end
 
+    IO.inspect query, label: "messages query"
     messages = Repo.all(query) |> Enum.reverse() # Reverse to get asc order
     at_beginning = length(messages) < 50
     {messages, at_beginning}
@@ -457,7 +460,7 @@ defmodule Windyfall.Messages do
       where: m.thread_id == ^thread_id and m.id >= ^target_message_id,
       order_by: [asc: m.id],
       limit: ^limit_after + 1, # +1 to check if we are at the end
-      preload: [:user, reactions: [:user], replying_to: [:user]]
+      preload: [:user, :attachments, reactions: [:user], replying_to: [:user]]
 
     messages_after_target = Repo.all(query_after)
     at_end = length(messages_after_target) <= limit_after
@@ -469,7 +472,7 @@ defmodule Windyfall.Messages do
       where: m.thread_id == ^thread_id and m.id < ^target_message_id,
       order_by: [desc: m.id], # Fetch descending from target
       limit: ^limit_before + 1, # +1 to check if we are at the beginning
-      preload: [:user, reactions: [:user], replying_to: [:user]]
+      preload: [:user, :attachments, reactions: [:user], replying_to: [:user]]
 
     messages_before_target = Repo.all(query_before) |> Enum.reverse() # Reverse to get chronological
     at_beginning = length(messages_before_target) <= limit_before
@@ -683,12 +686,14 @@ defmodule Windyfall.Messages do
   end
 
   defp message_struct(msg) do
-   %{
-     id: msg.id,
-     text: msg.message, # Use :message key as per incoming data
-     inserted_at: msg.inserted_at
-     # Reactions are handled at the ChatLive/MessageComponent level, not needed here
-   }
+    %{
+      id: msg.id,
+      text: msg.message, # Use :message key as per incoming data
+      inserted_at: msg.inserted_at,
+      # Reactions are handled at the ChatLive/MessageComponent level, not needed here
+      # Include attachments (use || [] for safety if preload might fail)
+      attachments: msg.attachments || []
+    }
   end
 
   defp process_group_reactions(group) do
@@ -707,27 +712,67 @@ defmodule Windyfall.Messages do
   end
 
   @doc """
-  Creates a new message
+  Creates a new message, potentially with attachments.
+  Requires either message_text or attachments_metadata to be non-empty.
   """
-  def create_message(message_text, thread_id, user, replying_to_message_id \\ nil) do
-    # Build changeset, including the optional reply_to field
-    changeset = Message.changeset(%Message{}, %{
-      message: message_text,
-      thread_id: thread_id,
-      user_id: user.id,
-      replying_to_message_id: replying_to_message_id
-    })
+  def create_message(message_text, thread_id, user, replying_to_message_id \\ nil, attachments_metadata \\ []) do
+    # --- Validate input: Ensure message or attachments exist ---
+    has_text = message_text && String.trim(message_text) != ""
+    has_attachments = attachments_metadata != []
 
-    # Insert the message
-    case Repo.insert(changeset) do
-      {:ok, message} ->
-        # Return the message struct, preloading user etc.
-        # Preloads moved to where the message is consumed, or done after creation if needed immediately
-        {:ok, Repo.preload(message, [:user, replying_to: [:user]])}
+    if !has_text and !has_attachments do
+      {:error, :content_required} # Return a custom error atom
+    else
+      # --- Proceed with transaction ---
+      Ecto.Multi.new()
+      |> Ecto.Multi.insert(:message, fn _ ->
+        # Build message changeset (pass attrs directly)
+        Message.changeset(%Message{}, %{
+          message: message_text, # Can be nil or empty if attachments exist
+          thread_id: thread_id,
+          user_id: user.id,
+          replying_to_message_id: replying_to_message_id
+        })
+      end)
+      |> Ecto.Multi.run(:attachments, fn repo, %{message: message} ->
+        # Prepare attachment changesets using the inserted message's ID
+        attachment_changesets =
+          Enum.map(attachments_metadata, fn meta ->
+            Attachment.changeset(%Attachment{message_id: message.id}, meta)
+          end)
 
-      {:error, changeset} ->
-        # Return the error changeset if insertion fails
-        {:error, changeset}
+        # Insert all attachments (returns {:ok, inserted_attachments} or {:error, ...})
+        # Consider Repo.insert_all for better performance if supported and desired
+        Enum.reduce_while(attachment_changesets, {:ok, []}, fn changeset, {:ok, acc} ->
+          case repo.insert(changeset) do
+            {:ok, attachment} -> {:cont, {:ok, [attachment | acc]}}
+            {:error, error_changeset} -> {:halt, {:error, error_changeset}}
+          end
+        end)
+      end)
+      |> Repo.transaction()
+      |> case do
+        {:ok, %{message: message, attachments: attachments}} ->
+          # Preload necessary associations for the broadcast/return value
+          message = Repo.preload(message, [:user, replying_to: [:user], attachments: []]) # Preload attachments too
+          # Manually assign the just-inserted attachments to the preloaded list
+          message = %{message | attachments: Enum.reverse(attachments)}
+          {:ok, message}
+
+        {:error, :message, changeset, _} ->
+          {:error, changeset} # Error creating message
+
+        {:error, :attachments, attachment_error_changeset, _} ->
+          {:error, attachment_error_changeset} # Error creating attachments
+
+        {:error, :content_required} -> # Should be caught earlier, but handle just in case
+          {:error, :content_required}
+
+        # Handle other potential Multi errors
+        {:error, failed_operation, failed_value, _changes_so_far} ->
+           Logger.error("Failed message/attachment creation. Op: #{failed_operation}, Value: #{inspect(failed_value)}")
+           {:error, :transaction_failed}
+      end
     end
   end
 

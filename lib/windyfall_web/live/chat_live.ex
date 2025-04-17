@@ -13,6 +13,11 @@ defmodule WindyfallWeb.ChatLive do
 
   alias WindyfallWeb.Chat.MessageInputComponent
 
+  alias WindyfallWeb.AttachmentHelpers
+  import WindyfallWeb.AttachmentHelpers
+
+  @manual_convert_threshold 1000
+
   def mount(params, _session, socket) do
     current_user = socket.assigns.current_user
     {context, context_error} = determine_context_from_params(params)
@@ -73,6 +78,17 @@ defmodule WindyfallWeb.ChatLive do
         |> assign(:sharing_item_id, nil)
         |> assign(:jump_target_id, nil)
         |> assign(:initial_load_type, :latest)
+        |> allow_upload(:attachments, # Name matches live_file_input ref
+             accept: :any, # Or specify: ~w(.pdf .zip .png .jpg .jpeg .gif .txt .mov .mp4 .mp3) etc.
+             max_entries: 10, # Example limit
+             max_file_size: 25_000_000, # Example: 25MB
+             auto_upload: true
+             # progress: {__MODULE__, :handle_progress, []} # Optional: For progress display
+           )
+        |> assign(:show_text_viewer, false)
+        |> assign(:text_viewer_data, nil)
+        |> assign(:converted_attachments, []) # List to hold metadata of server-created files
+        |> assign(:editor_content_length, 0) # Track length for UI button
 
       socket = assign(socket, :active_message_ids, message_ids)
 
@@ -436,6 +452,7 @@ defmodule WindyfallWeb.ChatLive do
               id="message-input"
               current_user={@current_user}
               thread_id={@thread_id}
+              uploads={@uploads}
             />
           <% else %>
             <div class="hidden md:flex flex-1 items-center justify-center bg-gray-50">
@@ -458,6 +475,47 @@ defmodule WindyfallWeb.ChatLive do
           current_user={@current_user}
         />
       <% end %>
+
+
+  <%# Conditionally render based on ChatLive assign %>
+  <%= if @show_text_viewer && @text_viewer_data do %>
+    <div id="text-viewer-overlay" class="fixed inset-0 bg-black/70 backdrop-blur-sm flex flex-col p-4 z-[1000]" aria-modal="true" role="dialog" aria-labelledby="text-viewer-filename">
+      <%# Header %>
+      <div class="flex items-center justify-between mb-3 flex-shrink-0">
+        <h3 id="text-viewer-filename" class="text-lg font-medium text-white truncate pr-4">
+          <%= @text_viewer_data.filename %>
+        </h3>
+        <button id="text-viewer-close" phx-click="close_text_viewer" aria-label="Close text viewer" class="text-white/70 hover:text-white bg-black/30 rounded-full p-2">
+          <.icon name="hero-x-mark" class="w-6 h-6" />
+        </button>
+      </div>
+
+      <%# Content Area %>
+      <div class="flex-1 bg-gray-800/80 border border-gray-600 rounded-md overflow-auto text-white relative">
+        <pre class="p-4 text-sm font-mono whitespace-pre-wrap break-words"><code><%= @text_viewer_data.content %></code></pre>
+
+        <%# Navigation (similar to image gallery) %>
+        <%= if length(@text_viewer_data.attachments) > 1 do %>
+          <button id="text-viewer-prev"
+                  phx-click="navigate_text_viewer"
+                  phx-value-direction="-1"
+                  disabled={@text_viewer_data.index <= 0}
+                  aria-label="Previous file"
+                  class="text-viewer-nav prev">
+             <.icon name="hero-chevron-left" class="w-8 h-8" />
+          </button>
+          <button id="text-viewer-next"
+                  phx-click="navigate_text_viewer"
+                  phx-value-direction="1"
+                  disabled={@text_viewer_data.index >= length(@text_viewer_data.attachments) - 1}
+                  aria-label="Next file"
+                  class="text-viewer-nav next">
+             <.icon name="hero-chevron-right" class="w-8 h-8" />
+          </button>
+        <% end %>
+      </div>
+    </div>
+  <% end %>
     </div>
     """
   end
@@ -676,53 +734,105 @@ defmodule WindyfallWeb.ChatLive do
   end
 
   def handle_event("submit_message", %{"new_message" => message_text}, socket) do
-    if !socket.assigns.can_post do
-      {:noreply, put_flash(socket, :error, "You cannot post messages here.")}
-    else
-      # Proceed if allowed
-      case message_text do
-        "" ->
-          {:noreply, socket} # Ignore empty submissions
-        _ ->
-          user = socket.assigns.current_user
-          thread_id = socket.assigns.thread_id # Get from parent state
+    # --- Consume Uploads ---
+    # Assume the callback raises on error (e.g., using File.cp!)
+    # consume_uploaded_entries will return the list of metadata directly
+    # or raise if the callback fails. We can wrap in try/rescue if needed.
+    try do
+      consumed_upload_metadata =
+        consume_uploaded_entries(socket, :attachments, fn %{path: temp_path}, entry ->
+          dest_dir = Path.expand("./priv/static/uploads/messages")
+          File.mkdir_p!(dest_dir) # Ensure directory exists
+          extension = Path.extname(entry.client_name)
+          unique_filename = "#{Ecto.UUID.generate()}#{extension}"
+          dest_path = Path.join(dest_dir, unique_filename)
 
-          if is_nil(thread_id) do
-             # Should not happen if input is only shown when thread_id exists, but good safety check
-             {:noreply, put_flash(socket, :error, "No active thread selected.")}
-          else
-            replying_to_id = socket.assigns.replying_to && socket.assigns.replying_to.id
+          # Use File.cp! which raises on error
+          File.cp!(temp_path, dest_path)
 
-            case Messages.create_message(message_text, thread_id, user, replying_to_id) do
-              {:ok, new_message_struct} ->
-                # Construct payload (same as before)
-                IO.inspect new_message_struct, label: "new message struct upon creating mesage"
-                payload = %{
-                  id: new_message_struct.id,
-                  message: new_message_struct.message,
-                  user_id: new_message_struct.user_id,
-                  inserted_at: new_message_struct.inserted_at,
-                  display_name: user.display_name,
-                  profile_image: user.profile_image
-                }
-                |> Map.put(:replying_to_message_id, new_message_struct.replying_to_message_id)
-                |> Map.put(:replying_to, maybe_get_reply_parent_info(new_message_struct))
+          web_path = "/uploads/messages/#{unique_filename}"
+          metadata = %{
+            filename: entry.client_name, web_path: web_path,
+            content_type: entry.client_type, size: entry.client_size
+          }
+          # Callback MUST return {:ok, metadata}
+          {:ok, metadata}
+        end)
+      # If we reach here, successful_metadata is a list like: [meta1, meta2, ...]
 
-                # Broadcast to the correct thread topic
-                WindyfallWeb.Endpoint.broadcast(PubSubTopics.thread(thread_id), "new_message", payload)
+      converted_metadata = socket.assigns.converted_attachments
+      all_successful_metadata = consumed_upload_metadata ++ converted_metadata
 
-                # Clear reply state and input field
-                socket = assign(socket, :replying_to, nil)
+      # --- Proceed with Message Creation ---
+      has_text = message_text && String.trim(message_text) != ""
+      has_attachments = all_successful_metadata != []
 
-                # Push event to clear input via RefocusInput hook
-                {:noreply, push_event(socket, "sent-message", %{})}
+      if !has_text and !has_attachments do
+        {:noreply, put_flash(socket, :error, "Message cannot be empty without attachments.")}
+      else
+        # Call create_message with text and successful metadata
+        user = socket.assigns.current_user
+        thread_id = socket.assigns.thread_id
+        replying_to_id = socket.assigns.replying_to && socket.assigns.replying_to.id
 
-              {:error, _changeset} ->
-                {:noreply, put_flash(socket, :error, "Failed to send message")}
-            end
-          end
-      end
-    end
+        case Messages.create_message(message_text, thread_id, user, replying_to_id, all_successful_metadata) do
+          {:ok, new_message_struct_with_attachments} -> # Message includes preloaded attachments now
+            # Construct payload for broadcast, including attachments
+            payload = %{
+              id: new_message_struct_with_attachments.id,
+              message: new_message_struct_with_attachments.message, # Might be "" or nil
+              user_id: new_message_struct_with_attachments.user_id,
+              inserted_at: new_message_struct_with_attachments.inserted_at,
+              display_name: user.display_name,
+              profile_image: user.profile_image,
+              replying_to_message_id: new_message_struct_with_attachments.replying_to_message_id,
+              replying_to: maybe_get_reply_parent_info(new_message_struct_with_attachments),
+              # Add attachments to payload
+              attachments: Enum.map(new_message_struct_with_attachments.attachments || [], fn att ->
+                %{id: att.id, filename: att.filename, web_path: att.web_path, content_type: att.content_type, size: att.size}
+              end)
+            }
+
+            WindyfallWeb.Endpoint.broadcast(PubSubTopics.thread(thread_id), "new_message", payload)
+
+            # Clear reply state, converted attachments, AND editor length tracker
+            socket =
+              socket
+              |> assign(:replying_to, nil)
+              |> assign(:converted_attachments, []) # Clear converted list
+              |> assign(:editor_content_length, 0) # Reset length tracker
+
+            {:noreply, push_event(socket, "sent-message", %{})}
+
+          {:error, :content_required} ->
+            {:noreply, put_flash(socket, :error, "Message content or attachment required.")}
+          {:error, changeset} ->
+            {:noreply, put_flash(socket, :error, "Failed to send message: #{inspect(changeset.errors)}")}
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Failed to send message: #{reason}")}
+        end
+      end # End if !has_text and !has_attachments
+    rescue
+      # Catch errors raised during consumption (e.g., from File.cp!)
+      e in [File.Error, RuntimeError] -> # Catch specific errors if possible
+        Logger.error("Error consuming uploads: #{Exception.format(:error, e, __STACKTRACE__)}")
+        {:noreply, put_flash(socket, :error, "Error processing uploaded files. Please try again.")}
+    end # End try
+  end
+
+  @impl true
+  def handle_event("validate_upload", _params, socket) do
+    # This handler is primarily needed to trigger LiveView's internal
+    # upload processing when the file input changes.
+    # We don't need to do much here for now, as allow_upload handles
+    # basic validation (size, type, count).
+    # If you needed more complex validation based on form state,
+    # you could add it here.
+    {:noreply, socket}
+  end
+
+  def handle_event("cancel_upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :attachments, ref)}
   end
 
   def handle_event("select_thread", %{"id" => id}, socket) do
@@ -853,7 +963,8 @@ defmodule WindyfallWeb.ChatLive do
           user_id: group.user_id, # Get from group
           display_name: group.display_name, # Get from group
           profile_image: group.profile_image, # Get from group
-          inserted_at: msg.inserted_at
+          inserted_at: msg.inserted_at,
+          attachments: msg.attachments || []
           # No :user key here
         }
       end)
@@ -1099,6 +1210,152 @@ defmodule WindyfallWeb.ChatLive do
       |> push_patch(to: base_path)
 
     {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("show_text_viewer", %{"message-id" => msg_id_str, "attachment-id" => att_id_str}, socket) do
+    message_id = String.to_integer(msg_id_str)
+    attachment_id_to_find = att_id_str # Keep as string/binary for comparison
+
+    # Fetch the message with attachments
+    message = Repo.get(Message, message_id) |> Repo.preload(:attachments)
+
+    if !message do
+      {:noreply, put_flash(socket, :error, "Message not found.")}
+    else
+      # Filter only displayable text attachments first
+      all_text_attachments = Enum.filter(message.attachments, &is_displayable_text?/1)
+
+      # --- Use Enum.reduce_while to find the attachment and its index ---
+      find_result = Enum.reduce_while(all_text_attachments, {:not_found, 0}, fn attachment, {:not_found, index} ->
+        # Compare IDs: Use Ecto.UUID.dump! if attachment.id is a binary UUID
+        current_attachment_id_str = if Map.has_key?(attachment, :binary_id), do: Ecto.UUID.dump!(attachment.id), else: to_string(attachment.id)
+
+        if current_attachment_id_str == attachment_id_to_find do
+           # Found it! Halt the reduction and return the found state
+          {:halt, {:found, index, attachment}}
+        else
+          # Not found yet, continue with the next index
+          {:cont, {:not_found, index + 1}}
+        end
+      end)
+      # find_result will be {:found, index, attachment} or {:not_found, final_index}
+      # --- End Enum.reduce_while ---
+
+      case find_result do
+        {:found, clicked_index, clicked_attachment} ->
+          # Proceed with reading the file content (existing logic)
+          relative_path = String.trim_leading(clicked_attachment.web_path, "/")
+          file_path = Path.join(["priv", "static" | String.split(relative_path, "/")])
+
+          case File.read(file_path) do
+            {:ok, content} ->
+              viewer_data = %{
+                filename: clicked_attachment.filename,
+                content: content,
+                # Store the *filtered* list of text attachments for navigation
+                attachments: all_text_attachments,
+                index: clicked_index
+              }
+              socket =
+                socket
+                |> assign(:show_text_viewer, true)
+                |> assign(:text_viewer_data, viewer_data)
+              {:noreply, socket}
+
+            {:error, reason} ->
+              Logger.error("Failed to read text attachment #{file_path}: #{reason}")
+              {:noreply, put_flash(socket, :error, "Could not load file content.")}
+          end
+
+        {:not_found, _} ->
+          # Clicked attachment not found in the filtered text list
+          {:noreply, put_flash(socket, :error, "Attachment not found or is not a viewable text file.")}
+      end
+    end
+  end
+
+  @impl true
+  def handle_event("close_text_viewer", _, socket) do
+    {:noreply, assign(socket, show_text_viewer: false, text_viewer_data: nil)}
+  end
+
+  @impl true
+  def handle_event("navigate_text_viewer", %{"direction" => direction_str}, socket) do
+    data = socket.assigns.text_viewer_data
+    if !data, do: {:noreply, socket} # Should not happen if viewer is open
+
+    direction = String.to_integer(direction_str) # Expecting "1" or "-1"
+    new_index = data.index + direction
+
+    if new_index >= 0 and new_index < length(data.attachments) do
+      next_attachment = Enum.at(data.attachments, new_index)
+
+      # Fetch content for the new file
+      relative_path = String.trim_leading(next_attachment.web_path, "/")
+      file_path = Path.join(["priv", "static" | String.split(relative_path, "/")])
+
+      case File.read(file_path) do
+        {:ok, new_content} ->
+          new_viewer_data = %{data |
+            filename: next_attachment.filename,
+            content: new_content,
+            index: new_index
+          }
+          {:noreply, assign(socket, :text_viewer_data, new_viewer_data)}
+        {:error, reason} ->
+           Logger.error("Failed to read next text attachment #{file_path}: #{reason}")
+           {:noreply, put_flash(socket, :error, "Could not load next file content.")}
+      end
+    else
+      # Index out of bounds, do nothing
+      {:noreply, socket}
+    end
+  end
+
+  # Event from "Convert to File" button
+  def handle_event("convert_to_file", %{"content" => content}, socket) do
+    if String.length(content) >= @manual_convert_threshold do
+      case FileHelpers.create_text_attachment(content, "message_snippet") do
+        {:ok, metadata} ->
+          new_converted = [metadata | socket.assigns.converted_attachments]
+          # Clear editor via JS and reset tracked length
+          socket =
+            socket
+            |> assign(:converted_attachments, new_converted)
+            |> assign(:editor_content_length, 0) # Reset length after conversion
+            |> push_event("js:clear_editor", %{uniqueId: "message-input"}) # Target specific input
+          {:noreply, socket}
+        {:error, reason} ->
+          {:noreply, put_flash(socket, :error, "Failed to convert message to file: #{reason}")}
+      end
+    else
+      # Should not happen if button is only shown when long, but handle anyway
+      {:noreply, put_flash(socket, :warn, "Message is not long enough to convert.")}
+    end
+  end
+
+  # Event from JS on long paste
+  def handle_event("handle_paste_conversion", %{"content" => pasted_content}, socket) do
+     case FileHelpers.create_text_attachment(pasted_content, "pasted_text") do
+       {:ok, metadata} ->
+         new_converted = [metadata | socket.assigns.converted_attachments]
+         socket =
+           socket
+           |> assign(:converted_attachments, new_converted)
+           |> put_flash(:info, "Pasted content added as attachment.") # User feedback
+         {:noreply, socket}
+       {:error, reason} ->
+         {:noreply, put_flash(socket, :error, "Failed to save pasted content as file: #{reason}")}
+     end
+  end
+
+  # Event from JS to remove a *converted* attachment before sending
+  def handle_event("remove_converted_attachment", %{"web_path" => web_path_to_remove}, socket) do
+    # Note: We don't delete the actual file here, only remove it from the pending list.
+    # File cleanup might need a separate process or happen on message deletion.
+    new_converted = Enum.reject(socket.assigns.converted_attachments, &(&1.web_path == web_path_to_remove))
+    {:noreply, assign(socket, :converted_attachments, new_converted)}
   end
 
   @impl true

@@ -76,5 +76,30 @@ and the footer (if added) stays at the bottom.
   </div>
   <div id="slate-toolbar-portal-root"></div>
 
+  <div id="image-gallery-overlay" class="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-[1000] hidden" aria-modal="true" role="dialog" aria-labelledby="gallery-image-alt">
+    <div id="gallery-image-container" class="relative">
+      <img id="gallery-image" src="" alt="" class="max-w-[90vw] max-h-[85vh] object-contain block" />
+      <p id="gallery-image-alt" class="sr-only"></p> <%# For screen readers %>
+    </div>
+
+    <%# Navigation Buttons %>
+    <button id="gallery-prev" aria-label="Previous image" class="gallery-nav prev">
+      <%# SVG Left Arrow Icon (e.g., Heroicon chevron-left) %>
+      <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+    </button>
+    <button id="gallery-next" aria-label="Next image" class="gallery-nav next">
+      <%# SVG Right Arrow Icon (e.g., Heroicon chevron-right) %>
+      <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+    </button>
+
+    <%# Close Button %>
+    <button id="gallery-close" aria-label="Close gallery" class="absolute top-4 right-4 text-white/70 hover:text-white bg-black/30 rounded-full p-2">
+      <%# SVG Close Icon (e.g., Heroicon x-mark) %>
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+    </button>
+  </div>
+  <%# --- End Image Gallery Overlay --- %>
+
+
 </body>
 </html>

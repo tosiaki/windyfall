@@ -6,6 +6,9 @@ defmodule WindyfallWeb.Chat.MessageComponent do
   alias WindyfallWeb.DateTimeHelpers
   alias WindyfallWeb.CoreComponents
   import WindyfallWeb.TextHelpers
+  import WindyfallWeb.NumberHelpers, only: [number_to_human_size: 1]
+  alias WindyfallWeb.AttachmentHelpers
+  import WindyfallWeb.AttachmentHelpers
 
   attr :group, :map, required: true
   attr :current_user, :map, required: true
@@ -58,6 +61,13 @@ defmodule WindyfallWeb.Chat.MessageComponent do
     replied_to_map_for_group =
       Map.take(assigns.replied_to_map || %{}, Enum.map(assigns.group.messages, & &1.id))
 
+    # Extract and map attachments for easier access in render
+    attachments_map =
+      Enum.reduce(assigns.group.messages, %{}, fn msg, acc ->
+        # Attachments should be preloaded by ChatLive
+        Map.put(acc, msg.id, msg.attachments || [])
+      end)
+
     # 3. Update socket assigns
     socket =
       socket
@@ -79,6 +89,7 @@ defmodule WindyfallWeb.Chat.MessageComponent do
            editing_content: editing_content
          )
       # 4. Reset and populate the stream with current data
+      |> assign(:attachments_map, attachments_map)
       |> stream(:reactions, stream_entries, reset: true)
 
     # Removed tracking presence from component, should be handled by parent
@@ -260,6 +271,13 @@ defmodule WindyfallWeb.Chat.MessageComponent do
 
         <div class={bubble_classes(@is_user, @message_count)}>
           <%= for {message, idx} <- Enum.with_index(@group.messages) do %>
+            <% message_attachments = Map.get(@attachments_map, message.id, []) %>
+            <% gallery_images = Enum.filter(message_attachments, &is_displayable_image?/1) %>
+            <%# Encode image data needed by JS (path, alt/filename) %>
+            <% gallery_json = Jason.encode!(Enum.map(gallery_images, &Map.take(&1, [:web_path, :filename]))) %>
+            <%# Unique ID for this message's gallery instance %>
+            <% gallery_id = "gallery-#{message.id}" %>
+
             <div class="relative group/message message-bubble" 
                  id={"message-#{message.id}"}
                  phx-mouseenter="show_reaction_menu"
@@ -356,13 +374,69 @@ defmodule WindyfallWeb.Chat.MessageComponent do
                     </div>
                   </form>
                 <% else %>
-                  <%# --- Render Final Markdown Content --- %>
-                  <div class="prose prose-sm max-w-none group/line">
-                     <%= render_markdown_with_spoilers(message.text, @myself) %>
-                  </div>
+                  <%# Render message text if it exists %>
+                  <%= if message.text && String.trim(message.text) != "" do %>
+                    <div class="prose prose-sm max-w-none group/line">
+                       <%= render_markdown_with_spoilers(message.text, @myself) %>
+                    </div>
+                  <% end %>
+
+                  <%# --- Render Attachments --- %>
+                  <%= if gallery_images != [] or message_attachments != gallery_images do %>
+                    <%# Wrapper div for attachments, holds gallery data %>
+                    <div class="mt-2 space-y-2 flex flex-col" id={gallery_id} data-gallery-images={gallery_json}>
+                      <%= for {attachment, img_index} <- Enum.with_index(message_attachments) do %>
+                        <%= cond do %>
+                          <% is_displayable_image?(attachment) -> %>
+                            <%# Render Image Preview %>
+                            <a href={attachment.web_path}
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               class="block mt-1 max-w-xs sm:max-w-sm md:max-w-md"
+                               title={"View image: #{attachment.filename}"}
+                               data-gallery-trigger
+                               data-gallery-id={gallery_id}
+                               data-image-index={img_index}
+                               >
+                              <img src={attachment.web_path}
+                                   alt={attachment.filename}
+                                   class="rounded-lg object-contain border border-[var(--color-border)] bg-gray-100 max-h-80 w-full"
+                                   loading="lazy" />
+                            </a>
+                          <% is_displayable_text?(attachment) -> %>
+                            <%# Render Text File Trigger %>
+                            <button type="button"
+                               phx-click="show_text_viewer"
+                               phx-value-message-id={message.id}
+                               phx-value-attachment-id={if Map.has_key?(attachment, :binary_id), do: Ecto.UUID.dump!(attachment.id), else: attachment.id}
+                               class="flex items-center w-full text-left gap-2 p-2 rounded-md border bg-white hover:bg-gray-50 transition-colors text-sm group"
+                               title={"View #{attachment.filename}"}
+                               >
+                              <.icon name="hero-document-text" class="w-5 h-5 text-gray-500 group-hover:text-indigo-600 flex-shrink-0" />
+                              <div class="flex-1 overflow-hidden">
+                                <div class="font-medium text-gray-800 truncate"><%= attachment.filename %></div>
+                                <div class="text-xs text-gray-500"><%= number_to_human_size(attachment.size) %></div>
+                              </div>
+                            </button>
+                          <% true -> %>
+                            <%# Render Generic File Link (Default Case) %>
+                            <a href={attachment.web_path} target="_blank" rel="noopener noreferrer"
+                               class="flex items-center gap-2 p-2 rounded-md border bg-white hover:bg-gray-50 transition-colors text-sm group"
+                               title={"Download #{attachment.filename}"} download={attachment.filename}>
+                               <.icon name="hero-document-arrow-down" class="w-5 h-5 text-gray-500 group-hover:text-blue-600 flex-shrink-0" />
+                               <div class="flex-1 overflow-hidden">
+                                 <div class="font-medium text-gray-800 truncate"><%= attachment.filename %></div>
+                                 <div class="text-xs text-gray-500"><%= number_to_human_size(attachment.size) %> • <%= attachment.content_type %></div>
+                               </div>
+                            </a>
+                        <% end %>
+                      <% end %>
+                    </div>
+                  <% end %>
+                  <%# --- End Attachments --- %>
                 <% end %>
 
-                <%# Timestamp (inside bubble, revealed on hover) %>
+                <%# Timestamp (inside bubble) %>
                 <%= if idx == @message_count - 1 && @editing_message_id != message.id do %>
                   <span class="timestamp">
                     <%= DateTimeHelpers.format_time(message.inserted_at) %>
@@ -370,7 +444,7 @@ defmodule WindyfallWeb.Chat.MessageComponent do
                 <% end %>
               </div>
 
-               <%# Reactions (outside content div for better layout) %>
+               <%# Reactions (outside content div) %>
                <%= if @editing_message_id != message.id do %>
                  <div
                    class="reactions-container"

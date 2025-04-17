@@ -4,16 +4,49 @@ defmodule WindyfallWeb.Chat.MessageInputComponent do
   alias Windyfall.Messages
   alias WindyfallWeb.CoreComponents
 
+  import WindyfallWeb.NumberHelpers, only: [number_to_human_size: 1]
+
   def render(assigns) do
     ~H"""
     <div id={@id} class="sticky bottom-0 bg-[var(--color-surface)]/90 backdrop-blur-sm border-t border-[var(--color-border)]">
       <div class="p-3 sm:p-4">
+        <%= for entry <- @uploads.attachments.entries do %>
+          <div class="flex items-center justify-between gap-2 p-2 mb-2 border rounded-md bg-gray-50 text-sm">
+            <div class="flex items-center gap-2 overflow-hidden">
+              <.icon name="hero-document" class="w-5 h-5 text-gray-500 flex-shrink-0" />
+              <span class="truncate" title={entry.client_name}><%= entry.client_name %></span>
+              <span class="text-xs text-gray-400">(<%= number_to_human_size(entry.client_size) %>)</span>
+              <%= for err <- upload_errors(@uploads.attachments, entry) do %>
+                <p class="text-red-500 text-xs"><%= error_to_string(err) %></p>
+              <% end %>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+              <progress max="100" value={entry.progress} class="w-16 h-1 appearance-none [&::-webkit-progress-bar]:rounded-lg [&::-webkit-progress-bar]:bg-slate-300 [&::-webkit-progress-value]:rounded-lg [&::-webkit-progress-value]:bg-slate-500 [&::-moz-progress-bar]:rounded-lg [&::-moz-progress-bar]:bg-slate-500"/>
+              <button
+                type="button"
+                phx-click="cancel_upload"
+                phx-value-ref={entry.ref}
+                aria-label="Cancel upload"
+                class="text-gray-500 hover:text-red-600 p-1"
+              >
+                <.icon name="hero-x-circle-solid" class="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        <% end %>
+
         <%= if @current_user do %>
           <form
             phx-submit="submit_message"
+            phx-change="validate_upload"
             class="flex gap-2 items-center rounded-xl bg-[var(--color-surface-alt)] border border-[var(--color-border)] focus-within:border-[var(--color-border-accent)] focus-within:ring-1 focus-within:ring-[var(--color-border-accent)] transition-all pl-4"
             id={@id <> "-form"}
           >
+            <label for={@uploads.attachments.ref} class="cursor-pointer p-2 rounded-full hover:bg-gray-200 text-gray-500 hover:text-gray-700 transition-colors">
+              <.icon name="hero-paper-clip" class="w-5 h-5" />
+            </label>
+            <.live_file_input upload={@uploads.attachments} class="sr-only" multiple />
+
             <div class="flex-1 message-editor-wrapper"> <%# Added wrapper %>
               <%= live_react_component(
                     "Components.SlateEditor", # Module name as string
@@ -31,8 +64,9 @@ defmodule WindyfallWeb.Chat.MessageInputComponent do
               type="submit"
               class="mr-1 flex-shrink-0 p-2 rounded-full bg-[var(--color-primary)] text-[var(--color-text-on-primary)] hover:bg-[var(--color-primary-dark)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] focus:ring-offset-1"
               aria-label="Send message"
+              disabled={Enum.any?(@uploads.attachments.entries, &(!&1.done?))}
             >
-              <%!-- Keep existing send icon --%>
+              <%!-- Send icon --%>
               <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
               </svg>
@@ -107,4 +141,9 @@ defmodule WindyfallWeb.Chat.MessageInputComponent do
     |> String.replace("\n", "\\n")
     |> String.replace("\r", "\\r")
   end
+
+  defp error_to_string(:too_large), do: "Too large"
+  defp error_to_string(:not_accepted), do: "You selected a non-accepted file type"
+  defp error_to_string({:too_many_files, max}), do: "You selected too many files (max: #{max})"
+  defp error_to_string(_), do: "Upload error"
 end
