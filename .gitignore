@@ -41,3 +41,5 @@ npm-debug.log
 # Uploaded images, separate these out later
 /priv/static/images/
 /priv/static/uploads/
+
+.env

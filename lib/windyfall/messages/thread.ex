@@ -56,6 +56,7 @@ defmodule Windyfall.Messages.Thread do
       !is_nil(topic_id) and !is_nil(user_id) ->
         add_error(changeset, :base, "Thread target cannot be both a topic and a user")
       is_nil(topic_id) and is_nil(user_id) ->
+        IO.inspect changeset, label: "the changeset for context validation"
         add_error(changeset, :base, "Thread must have a target topic or user")
       true ->
         changeset

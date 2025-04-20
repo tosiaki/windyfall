@@ -40,7 +40,7 @@ defmodule Windyfall.MixProject do
       {:phoenix_html, "~> 4.0"},
       {:phoenix_live_reload, "~> 1.5.3", only: :dev},
       {:phoenix_live_view, "~> 1.0.6"},
-      {:floki, ">= 0.30.0", only: :test},
+      {:floki, ">= 0.37.1", only: :test},
       {:earmark, "~> 1.4"},
       {:phoenix_live_dashboard, "~> 0.8.6"},
       {:esbuild, "~> 0.9", runtime: Mix.env() == :dev},
@@ -62,6 +62,7 @@ defmodule Windyfall.MixProject do
       {:dns_cluster, "~> 0.1.1"},
       {:bandit, "~> 1.2"},
       {:phoenix_live_react, "~> 0.5"},
+      {:ex_machina, "~> 2.7.0", only: :test}
     ]
   end
 

@@ -613,6 +613,7 @@ defmodule WindyfallWeb.Chat.MessageComponent do
   def handle_event("context_menu_action", payload, socket) do
     # Get the action
     action = payload["action"]
+    IO.inspect payload, label: "context_menu_action detected"
 
     # Get the message ID string, checking both possible keys
     message_id_str = payload["message_id"] || payload["message-id"] # Accept underscore OR hyphen

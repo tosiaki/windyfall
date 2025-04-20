@@ -18,15 +18,6 @@ defmodule WindyfallWeb.ThreadsComponent do
     {:ok, socket}
   end
 
-  # Needs rework for mixed items
-  def update(%{action: :prepend_thread, thread: thread} = assigns, socket) do
-    {:ok, 
-     socket
-     |> assign(assigns)
-     |> update(:threads, &[thread | &1])
-    }
-  end
-
   def update(assigns, socket) do
     # --- Assign updated state ---
     socket =
@@ -213,6 +204,38 @@ defmodule WindyfallWeb.ThreadsComponent do
     {:noreply, socket}
   end
 
+  @impl true
+  def handle_info({:update_thread_item, thread_data}, socket) do
+    # thread_data is the map received from the broadcast via ChatLive
+
+    # Check if the updated item type is :thread (it should be)
+    updated_item = %{type: :thread, item: thread_data, sort_key: thread_data.last_message_at || thread_data.inserted_at}
+    updated_thread_id = thread_data.id
+
+    # Update the @items list:
+    # 1. Remove the old version of the thread (if it exists)
+    # 2. Prepend the new version
+    # 3. Re-sort based on the sort_key (which uses last_message_at)
+    new_items =
+      socket.assigns.items
+      # Filter out the old item if present (match on type and id)
+      |> Enum.reject(fn %{type: t, item: i} -> t == :thread and i.id == updated_thread_id end)
+      # Prepend the new item data
+      |> List.insert_at(0, updated_item)
+      # Re-sort the list (ensure sort_key is comparable, NaiveDateTime works)
+      |> Enum.sort_by(& &1.sort_key, {:desc, NaiveDateTime})
+
+    # Also update the bookmark status for the updated thread if needed
+    # (Though bookmark status isn't usually affected by new messages)
+    # new_bookmark_status = update_bookmark_status(socket.assigns.bookmark_status_set, updated_thread_id, ...)
+
+    socket =
+      socket
+      |> assign(:items, new_items)
+      # |> assign(:bookmark_status_set, new_bookmark_status) # Assign if updated
+
+    {:noreply, socket}
+  end
 
   # Helper component for tabs
   defp tab_button(assigns) do

@@ -14,6 +14,8 @@ defmodule Windyfall.Messages do
   alias Windyfall.Messages.Topic
   alias Windyfall.Messages.Bookmark
   alias Windyfall.Messages.Attachment
+  alias Windyfall.PubSubTopics
+  alias WindyfallWeb.Endpoint
 
   use WindyfallWeb, :verified_routes
 
@@ -277,6 +279,7 @@ defmodule Windyfall.Messages do
             {:ok, first_message} ->
               # Update the thread counts AFTER the first message is created
               updated_thread = update_thread_counts(thread, first_message)
+              IO.inspect updated_thread, label: "updated_thread after create message"
               # Fetch preloads if necessary (e.g., creator for broadcast)
               # Example: Repo.preload(updated_thread, [:creator, :topic, :user])
               {:ok, updated_thread} # Return the updated thread
@@ -408,7 +411,7 @@ defmodule Windyfall.Messages do
     end)
   end
 
-  def messages_before(current_messages, thread_id) do
+  def get_messages_before_id(thread_id, oldest_visible_id \\ nil) do
     query_base = from(m in Message,
         where: m.thread_id == ^thread_id,
         order_by: [desc: m.id], # Use ID for stable pagination
@@ -424,23 +427,21 @@ defmodule Windyfall.Messages do
       )
 
     query =
-      if Enum.empty?(current_messages) do
-        # Initial load - no cursor needed (or use created_at if preferred)
-        query_base
+      # If oldest_visible_id is provided, add the WHERE clause
+      if oldest_visible_id do
+        where(query_base, [m], m.id < ^oldest_visible_id)
       else
-        # Pagination - get messages before the oldest known message ID
-        # Assuming current_messages_flat is sorted oldest to newest if passed directly
-        # Or if only the ID is needed:
-        oldest_visible_id = List.first(current_messages).id # Assuming current_messages is grouped, need oldest actual message
-        # Need to reliably get the ID of the *oldest* message currently displayed
-        # Let's assume `current_messages` passed is the raw list sorted DESC by ID
-        last_id = List.last(current_messages).id # Get the ID of the oldest message in the previous batch
-
-        where(query_base, [m], m.id < ^last_id)
+        # Initial load (oldest_visible_id is nil), no WHERE clause needed
+        query_base
       end
 
-    IO.inspect query, label: "messages query"
     messages = Repo.all(query) |> Enum.reverse() # Reverse to get asc order
+
+    # Determine if we are at the beginning by checking if fewer messages than limit were returned
+    # We check *before* potentially removing messages if oldest_visible_id is nil
+    loaded_count = length(messages)
+    at_beginning = loaded_count < 50
+
     at_beginning = length(messages) < 50
     {messages, at_beginning}
   end
@@ -724,39 +725,50 @@ defmodule Windyfall.Messages do
       {:error, :content_required} # Return a custom error atom
     else
       # --- Proceed with transaction ---
-      Ecto.Multi.new()
-      |> Ecto.Multi.insert(:message, fn _ ->
-        # Build message changeset (pass attrs directly)
-        Message.changeset(%Message{}, %{
-          message: message_text, # Can be nil or empty if attachments exist
-          thread_id: thread_id,
-          user_id: user.id,
-          replying_to_message_id: replying_to_message_id
-        })
-      end)
-      |> Ecto.Multi.run(:attachments, fn repo, %{message: message} ->
-        # Prepare attachment changesets using the inserted message's ID
-        attachment_changesets =
-          Enum.map(attachments_metadata, fn meta ->
-            Attachment.changeset(%Attachment{message_id: message.id}, meta)
-          end)
-
-        # Insert all attachments (returns {:ok, inserted_attachments} or {:error, ...})
-        # Consider Repo.insert_all for better performance if supported and desired
-        Enum.reduce_while(attachment_changesets, {:ok, []}, fn changeset, {:ok, acc} ->
-          case repo.insert(changeset) do
-            {:ok, attachment} -> {:cont, {:ok, [attachment | acc]}}
-            {:error, error_changeset} -> {:halt, {:error, error_changeset}}
-          end
+      multi =
+        Ecto.Multi.new()
+        |> Ecto.Multi.insert(:message, fn _ ->
+          # Build message changeset (pass attrs directly)
+          Message.changeset(%Message{}, %{
+            message: message_text, # Can be nil or empty if attachments exist
+            thread_id: thread_id,
+            user_id: user.id,
+            replying_to_message_id: replying_to_message_id
+          })
         end)
-      end)
-      |> Repo.transaction()
+        |> Ecto.Multi.run(:attachments, fn repo, %{message: message} ->
+          # Prepare attachment changesets using the inserted message's ID
+          attachment_changesets =
+            Enum.map(attachments_metadata, fn meta ->
+              Attachment.changeset(%Attachment{message_id: message.id}, meta)
+            end)
+
+          # Insert all attachments (returns {:ok, inserted_attachments} or {:error, ...})
+          # Consider Repo.insert_all for better performance if supported and desired
+          Enum.reduce_while(attachment_changesets, {:ok, []}, fn changeset, {:ok, acc} ->
+            case repo.insert(changeset) do
+              {:ok, attachment} -> {:cont, {:ok, [attachment | acc]}}
+              {:error, error_changeset} -> {:halt, {:error, error_changeset}}
+            end
+          end)
+        end)
+        |> Ecto.Multi.run(:thread_preview, fn _repo, %{message: message} ->
+            # Fetch preview data for the parent thread
+            case get_thread_preview(message.thread_id) do
+               nil -> {:error, :thread_not_found_for_preview} # Should not happen
+               preview -> {:ok, preview}
+            end
+        end)
+
+      Repo.transaction(multi)
       |> case do
-        {:ok, %{message: message, attachments: attachments}} ->
+        {:ok, %{message: message, attachments: attachments, thread_preview: thread_preview}} ->
           # Preload necessary associations for the broadcast/return value
           message = Repo.preload(message, [:user, replying_to: [:user], attachments: []]) # Preload attachments too
           # Manually assign the just-inserted attachments to the preloaded list
           message = %{message | attachments: Enum.reverse(attachments)}
+          Endpoint.broadcast!(PubSubTopics.thread_list_updates(), "thread_updated", thread_preview)
+
           {:ok, message}
 
         {:error, :message, changeset, _} ->
@@ -764,9 +776,9 @@ defmodule Windyfall.Messages do
 
         {:error, :attachments, attachment_error_changeset, _} ->
           {:error, attachment_error_changeset} # Error creating attachments
-
-        {:error, :content_required} -> # Should be caught earlier, but handle just in case
-          {:error, :content_required}
+        {:error, :thread_preview, reason, _} ->
+          Logger.error("Failed to get thread preview after message creation: #{inspect(reason)}")
+          {:error, :preview_fetch_failed}
 
         # Handle other potential Multi errors
         {:error, failed_operation, failed_value, _changes_so_far} ->
@@ -1248,7 +1260,7 @@ end
       where: t.id == ^thread_id,
       # --- JOIN/SELECT CREATOR ---
       join: c in assoc(t, :creator), # Join creator
-      left_join: m_first in Message, on: m_first.thread_id == t.id,
+      left_join: m in Message, on: m.thread_id == t.id,
       group_by: [t.id, c.id], # Group by creator too
       # --- END JOIN/SELECT ---
       limit: 1,
@@ -1263,7 +1275,13 @@ end
         # --- End author fields ---
         first_message_preview: fragment("""
                SUBSTRING( (ARRAY_AGG(? ORDER BY ? ASC) FILTER (WHERE ? IS NOT NULL))[1] FROM 1 FOR 280 )
-               """, m_first.message, m_first.inserted_at, m_first.message)
+               """, m.message, m.inserted_at, m.message),
+        message_count: count(m.id),
+        last_message_at: max(m.inserted_at),
+        inserted_at: t.inserted_at,
+        spin_off_of_message_id: t.spin_off_of_message_id,
+        topic_id: t.topic_id,
+        user_id: t.user_id
         # Add context fields if needed by preview logic later
         # topic_id: t.topic_id,
         # user_id: t.user_id
@@ -1359,7 +1377,6 @@ end
     if thread_ids == [] do
       MapSet.new()
     else
-      IO.inspect "getting bookmarks"
       from(b in Bookmark,
         where: b.user_id == ^user_id and b.thread_id in ^thread_ids,
         select: b.thread_id

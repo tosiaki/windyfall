@@ -35,6 +35,26 @@ defmodule WindyfallWeb.Chat.MessageInputComponent do
           </div>
         <% end %>
 
+        <%# Display Converted File "Previews" %>
+        <%= for converted_att <- @converted_attachments do %>
+          <div class="flex items-center justify-between gap-2 p-2 mb-2 border border-dashed border-blue-300 rounded-md bg-blue-50/50 text-sm">
+            <div class="flex items-center gap-2 overflow-hidden">
+              <.icon name="hero-document-text" class="w-5 h-5 text-blue-600 flex-shrink-0" />
+              <span class="truncate font-medium text-blue-800" title={converted_att.filename}><%= converted_att.filename %></span>
+              <span class="text-xs text-blue-500">(<%= number_to_human_size(converted_att.size) %>)</span>
+            </div>
+            <button
+              type="button"
+              phx-click="remove_converted_attachment"
+              phx-value-web_path={converted_att.web_path}
+              aria-label="Remove this converted file"
+              class="text-blue-600 hover:text-red-600 p-1"
+            >
+              <.icon name="hero-x-circle-solid" class="w-4 h-4" />
+            </button>
+          </div>
+        <% end %>
+
         <%= if @current_user do %>
           <form
             phx-submit="submit_message"
@@ -60,6 +80,19 @@ defmodule WindyfallWeb.Chat.MessageInputComponent do
                     phx_update: "ignore",
                   ) %>
             </div>
+
+            <%# --- Convert to File Button --- %>
+            <%= if @editor_content_length >= @manual_convert_threshold do %>
+              <button type="button"
+                phx-click="request_content_for_conversion"
+                phx-target={@myself}
+                class="text-xs mx-2 px-2 py-1 rounded border border-blue-300 bg-blue-100 text-blue-700 hover:bg-blue-200"
+                title="Convert current message text to a file attachment">
+                Convert to File
+              </button>
+            <% end %>
+            <%# --- End Convert Button --- %>
+            
             <button
               type="submit"
               class="mr-1 flex-shrink-0 p-2 rounded-full bg-[var(--color-primary)] text-[var(--color-text-on-primary)] hover:bg-[var(--color-primary-dark)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] focus:ring-offset-1"
@@ -117,6 +150,10 @@ defmodule WindyfallWeb.Chat.MessageInputComponent do
             {:noreply, put_flash(socket, :error, "Failed to send message")}
         end
     end
+  end
+
+  def handle_event("request_content_for_conversion", _, socket) do
+    {:noreply, push_event(socket, "get_content_for_conversion", %{uniqueId: socket.assigns.id})}
   end
 
   defp broadcast_message(message, thread_id) do

@@ -19,4 +19,7 @@ defmodule Windyfall.PubSubTopics do
   # def global_threads(), do: "threads"
   # def user_notifications(user_id), do: "user_notify:#{user_id}"
 
+  @doc "Generates the topic string for general thread list updates."
+  @spec thread_list_updates() :: String.t()
+  def thread_list_updates(), do: "threads:updates"
 end

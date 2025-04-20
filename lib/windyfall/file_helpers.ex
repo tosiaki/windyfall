@@ -19,13 +19,16 @@ defmodule Windyfall.FileHelpers do
     try do
       File.mkdir_p!(dest_dir_abs)
       File.write!(dest_path_abs, content)
-      {:ok, file_size} = File.stat(dest_path_abs, [:size])
+      # Get the File.Stat struct
+      {:ok, file_stat_struct} = File.stat(dest_path_abs) # Get full struct for simplicity
+      # Extract the integer size from the struct
+      actual_file_size = file_stat_struct.size
 
       metadata = %{
         filename: filename,
         web_path: web_path,
         content_type: "text/plain",
-        size: file_size
+        size: actual_file_size
       }
       {:ok, metadata}
     rescue

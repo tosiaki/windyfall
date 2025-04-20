@@ -1345,7 +1345,7 @@ if (document.readyState === 'loading') {
 
 // --- End Image Gallery Logic ---
 
-console.log("change succeded 50")
+console.log("change succeded 52")
 // Listener for custom clipboard event pushed from LiveView (if copy logic stays in LV)
 // window.addEventListener("clipboard-copy", event => {
 //   if (event.detail.content) {

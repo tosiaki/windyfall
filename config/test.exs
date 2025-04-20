@@ -9,9 +9,9 @@ config :pbkdf2_elixir, :rounds, 1
 # to provide built-in test partitioning in CI environment.
 # Run `mix help test` for more information.
 config :windyfall, Windyfall.Repo,
-  username: "postgres",
-  password: "postgres",
-  hostname: "localhost",
+  username: System.get_env("TEST_DATABASE_USER", "postgres"),
+  password: System.fetch_env!("TEST_DATABASE_PASSWORD"),
+  hostname: System.get_env("TEST_DATABASE_HOST", "localhost"),
   database: "windyfall_test#{System.get_env("MIX_TEST_PARTITION")}",
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2

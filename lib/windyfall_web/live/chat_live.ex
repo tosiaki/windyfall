@@ -7,6 +7,7 @@ defmodule WindyfallWeb.ChatLive do
   alias WindyfallWeb.Presence
   alias WindyfallWeb.TextHelpers
   import WindyfallWeb.TextHelpers, only: [truncate: 2]
+  alias Windyfall.FileHelpers
   alias Windyfall.Repo
   alias Windyfall.Messages.Message
   alias Windyfall.Accounts
@@ -41,7 +42,7 @@ defmodule WindyfallWeb.ChatLive do
 
       {raw_messages, at_beginning, reactions_map, user_reactions_map, replied_to_map, grouped_messages, message_ids} =
         if initial_load_needed do
-          {msgs, at_beg} = Messages.messages_before([], thread_id)
+          {msgs, at_beg} = Messages.get_messages_before_id(thread_id)
           msg_ids = Enum.map(msgs, & &1.id)
           Windyfall.ReactionCache.ensure_cached(msg_ids)
           {reactions, user_reactions_map, replied_to_map} = process_preloaded_reactions(msgs, current_user.id)
@@ -88,13 +89,16 @@ defmodule WindyfallWeb.ChatLive do
         |> assign(:show_text_viewer, false)
         |> assign(:text_viewer_data, nil)
         |> assign(:converted_attachments, []) # List to hold metadata of server-created files
+        |> assign(:manual_convert_threshold, @manual_convert_threshold)
         |> assign(:editor_content_length, 0) # Track length for UI button
+      # |> put_flash(:error, "You cannot delete this message.")
 
       socket = assign(socket, :active_message_ids, message_ids)
 
       if connected?(socket) do
         track_presence(socket)
         setup_subscriptions(message_ids)
+        WindyfallWeb.Endpoint.subscribe(PubSubTopics.thread_list_updates())
       end
 
       {:ok, socket}
@@ -271,13 +275,28 @@ defmodule WindyfallWeb.ChatLive do
           :bookmarks ->
             # ChatLive doesn't load messages when bookmarks tab is active unless a thread_id is specified
             if thread_id do # Load thread messages if a specific thread is selected
-              load_messages_based_on_params(thread_id, fragment)
+              {msgs, at_beg} = Messages.get_messages_before_id(thread_id)
+              {msgs, at_beg, false, nil, :latest} # Assume not at end on initial thread select
             else # No thread selected, load nothing for messages view here
               {[], true, true, nil, :none}
             end
 
           :threads -> # Default tab: Load context messages or specific thread
-            load_messages_based_on_params(thread_id, fragment)
+            # Logic for loading latest or around target
+            target_message_id_str = fragment && String.trim_leading(fragment, "message-")
+            case target_message_id_str |> parse_int_or_nil() do
+              target_id when not is_nil(target_id) and not is_nil(thread_id) ->
+                # Keep using messages_around for jump-to-target
+                {msgs, at_beg, at_end} = Messages.messages_around(thread_id, target_id)
+                {msgs, at_beg, at_end, target_id, :around_target}
+              _ -> # Load latest
+                 if thread_id do
+                    {msgs, at_beg} = Messages.get_messages_before_id(thread_id)
+                    {msgs, at_beg, false, nil, :latest} # Assume not at end
+                 else
+                    {[], true, true, nil, :none}
+                 end
+            end
         end
 
       # Process messages, reactions, etc. (common logic)
@@ -433,7 +452,7 @@ defmodule WindyfallWeb.ChatLive do
                 </div>
               <% end %>
             </div>
-
+                Outside replying <%= inspect @replying_to %>
             <%= if @replying_to do %>
               <div class="reply-indicator px-4 py-2 text-sm bg-gray-100 border-t border-b text-gray-600 flex justify-between items-center">
                 <span>
@@ -453,6 +472,9 @@ defmodule WindyfallWeb.ChatLive do
               current_user={@current_user}
               thread_id={@thread_id}
               uploads={@uploads}
+              converted_attachments={@converted_attachments}
+              editor_content_length={@editor_content_length}
+              manual_convert_threshold={@manual_convert_threshold}
             />
           <% else %>
             <div class="hidden md:flex flex-1 items-center justify-center bg-gray-50">
@@ -613,41 +635,54 @@ defmodule WindyfallWeb.ChatLive do
     thread_id = socket.assigns.thread_id
     current_user_id = socket.assigns.current_user.id
 
-    # Fetch older messages with preloaded reactions
-    {new_raw_messages, at_beginning} = 
-      Messages.messages_before(current_messages_flat, thread_id)
+    oldest_visible_id =
+      case socket.assigns.messages do
+        # Get the ID of the first message in the first group
+        [%{messages: [first_msg | _]} | _] -> first_msg.id
+        # Handle empty list case (shouldn't happen if load-before is triggered, but safety)
+        _ -> nil
+      end
+ 
+    # Should not attempt to load if oldest_visible_id is nil unless it's a weird state
+    if is_nil(oldest_visible_id) do
+       Logger.warn("load-before triggered with no visible messages?")
+       {:noreply, socket} # Do nothing if no cursor
+    else
+      {new_raw_messages, at_beginning} = 
+        Messages.get_messages_before_id(thread_id, oldest_visible_id)
 
-    # --- Process reactions for newly loaded messages ---
-    new_message_ids = Enum.map(new_raw_messages, & &1.id)
-    {new_reactions_map, new_user_reactions_map, new_replied_to_map} =
-      process_preloaded_reactions(new_raw_messages, current_user_id)
-    # --- End reaction processing ---
+      # --- Process reactions for newly loaded messages ---
+      new_message_ids = Enum.map(new_raw_messages, & &1.id)
+      {new_reactions_map, new_user_reactions_map, new_replied_to_map} =
+        process_preloaded_reactions(new_raw_messages, current_user_id)
+      # --- End reaction processing ---
 
-    # Group only the newly fetched messages
-    new_groups = Messages.group_messages(new_raw_messages)
+      # Group only the newly fetched messages
+      new_groups = Messages.group_messages(new_raw_messages)
 
-    # Merge new groups before existing ones
-    updated_messages = merge_message_groups(socket.assigns.messages, new_groups)
+      # Merge new groups before existing ones
+      updated_messages = merge_message_groups(socket.assigns.messages, new_groups)
 
-    # Subscribe to reaction topics for new messages
-    setup_subscriptions(new_message_ids)
+      # Subscribe to reaction topics for new messages
+      setup_subscriptions(new_message_ids)
 
-    # Prime the reaction cache
-    Windyfall.ReactionCache.ensure_cached(new_message_ids)
-    
-    socket =
-      socket
-      # |> stream_messages(new_raw_messages)
-      |> update(:reactions, &Map.merge(&1, new_reactions_map))
-      |> update(:user_reactions, &Map.merge(&1, new_user_reactions_map))
-      |> update(:replied_to_map, &Map.merge(&1, new_replied_to_map))
-      |> assign(:messages, updated_messages)
-      |> assign(:at_beginning, at_beginning)
-      |> assign(:at_end, false)
-      |> update(:active_message_ids, & Enum.uniq(&1 ++ new_message_ids))
-      |> update(:subscribed_mids, &MapSet.union(&1, MapSet.new(new_message_ids)))
+      # Prime the reaction cache
+      Windyfall.ReactionCache.ensure_cached(new_message_ids)
 
-    {:noreply, socket}
+      socket =
+        socket
+        # |> stream_messages(new_raw_messages)
+        |> update(:reactions, &Map.merge(&1, new_reactions_map))
+        |> update(:user_reactions, &Map.merge(&1, new_user_reactions_map))
+        |> update(:replied_to_map, &Map.merge(&1, new_replied_to_map))
+        |> assign(:messages, updated_messages)
+        |> assign(:at_beginning, at_beginning)
+        |> assign(:at_end, false)
+        |> update(:active_message_ids, & Enum.uniq(&1 ++ new_message_ids))
+        |> update(:subscribed_mids, &MapSet.union(&1, MapSet.new(new_message_ids)))
+
+      {:noreply, socket}
+    end
   end
 
   # Placeholder for load-after (if needed later)
@@ -891,7 +926,7 @@ defmodule WindyfallWeb.ChatLive do
 
     # Load data for the new thread
     # (Keep using the batch loading logic from previous refactors)
-    {raw_messages, at_beginning} = Messages.messages_before([], thread_id)
+    {raw_messages, at_beginning} = Messages.get_messages_before_id(thread_id)
     IO.inspect raw_messages, label: "raw mesages are this"
     grouped = Messages.group_messages(raw_messages)
     message_ids = Enum.map(raw_messages, & &1.id)
@@ -1125,7 +1160,6 @@ defmodule WindyfallWeb.ChatLive do
     # Find the message details in the already loaded state
     # This requires searching through the grouped @messages
     reply_target = find_message_in_groups(socket.assigns.messages, message_id)
-    IO.inspect reply_target, label: "handle_info start_reply target" 
 
     socket =
       if reply_target do
@@ -1135,13 +1169,13 @@ defmodule WindyfallWeb.ChatLive do
           user_display_name: reply_target.user_display_name, # Assumes find_message... returns this
           text: reply_target.text # Assumes find_message... returns this
         }
+
         # Assign state and potentially push focus to input
         socket
         |> assign(:replying_to, replying_to_info)
         |> push_event("focus-reply-input", %{})
       else
         # Message not found (shouldn't happen ideally)
-        IO.inspect "Reply target not found in handle_info"
         put_flash(socket, :error, "Cannot reply to message.")
       end
 
@@ -1313,8 +1347,13 @@ defmodule WindyfallWeb.ChatLive do
     end
   end
 
+  def handle_event("editor_length_update", %{"length" => length}, socket) do
+    {:noreply, assign(socket, editor_content_length: length)}
+  end
+
   # Event from "Convert to File" button
-  def handle_event("convert_to_file", %{"content" => content}, socket) do
+  def handle_event("convert_to_file", %{"content" => content}, socket) do 
+
     if String.length(content) >= @manual_convert_threshold do
       case FileHelpers.create_text_attachment(content, "message_snippet") do
         {:ok, metadata} ->
@@ -1324,7 +1363,7 @@ defmodule WindyfallWeb.ChatLive do
             socket
             |> assign(:converted_attachments, new_converted)
             |> assign(:editor_content_length, 0) # Reset length after conversion
-            |> push_event("js:clear_editor", %{uniqueId: "message-input"}) # Target specific input
+            |> push_event("clear_editor", %{uniqueId: "message-input"}) # Target specific input
           {:noreply, socket}
         {:error, reason} ->
           {:noreply, put_flash(socket, :error, "Failed to convert message to file: #{reason}")}
@@ -1340,6 +1379,7 @@ defmodule WindyfallWeb.ChatLive do
      case FileHelpers.create_text_attachment(pasted_content, "pasted_text") do
        {:ok, metadata} ->
          new_converted = [metadata | socket.assigns.converted_attachments]
+        IO.inspect new_converted, label: "new converted text"
          socket =
            socket
            |> assign(:converted_attachments, new_converted)
@@ -1686,6 +1726,7 @@ defmodule WindyfallWeb.ChatLive do
         {:noreply, put_flash(socket, :error, "Message not found.")}
 
       {:error, :unauthorized} ->
+        IO.inspect "unauthorized delete"
         {:noreply, put_flash(socket, :error, "You cannot delete this message.")}
 
       {:error, _changeset_or_reason} ->
@@ -1772,6 +1813,38 @@ defmodule WindyfallWeb.ChatLive do
         error_msg = "Failed to share: #{format_share_error(reason)}"
         {:noreply, put_flash(socket, :error, error_msg)}
     end
+  end
+
+  @impl true
+  def handle_info(%{event: "thread_updated", payload: thread_preview_data}, socket) do
+    # Get the context this ChatLive instance is currently displaying
+    current_context = socket.assigns.context
+
+    # Check if the updated thread belongs to the current context
+    is_relevant = case current_context.type do
+      :topic ->
+        thread_preview_data.topic_id == current_context.id
+      :user ->
+        thread_preview_data.user_id == current_context.id
+      :global ->
+        # In a global view, all updates might be relevant, or maybe filter somehow?
+        # Let's assume global shows all for now.
+        true # Or add specific filtering if needed for global view
+      _ ->
+        false # Unknown context type
+    end
+
+    if is_relevant do
+      # Send the updated preview data to the ThreadsComponent instance
+      send_update(
+        WindyfallWeb.ThreadsComponent,
+        id: "threads-list", # Ensure this matches the component's ID
+        action: :update_thread_item,
+        thread_data: thread_preview_data
+      )
+    end
+
+    {:noreply, socket}
   end
 
   defp update_reaction_state(reactions, user_reactions, message_id, emoji, user_id, action) do

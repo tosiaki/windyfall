@@ -9,6 +9,9 @@ import 'prismjs/components/prism-css'; // Example: Add other languages if needed
 import 'prismjs/components/prism-javascript';
 import debounce from 'lodash.debounce'; // Use lodash debounce
 
+const MANUAL_CONVERT_THRESHOLD = 1000; // Characters
+const PASTE_THRESHOLD = 500; 
+
 const initialEmptyValue = [
   {
     type: 'paragraph',
@@ -183,7 +186,8 @@ const SlateEditor = (props) => {
       hiddenInputName = "new_message",
       autoFocus = false,
       placeholder = "Enter your message...",
-      pushEvent
+      pushEvent,
+      handleEvent
   } = props;
 
   // Create editor instance
@@ -216,11 +220,20 @@ const SlateEditor = (props) => {
       // No cleanup needed, the element should persist
     }, []); // Run only once on mount
 
+    // --- Track length and push updates ---
+    const checkAndPushLength = useCallback((currentValue) => {
+        const markdownString = serializeToMarkdown(currentValue);
+        const len = markdownString.length;
+        // Push length update event to the parent LiveComponent/LiveView
+        if (pushEvent) {
+            pushEvent("editor_length_update", { length: len });
+        }
+    }, [pushEvent, serializeToMarkdown]); // Add serialize dep
+
   // Callback to update hidden input and potentially notify parent LV
   const updateHiddenInput = useCallback((newValue) => {
     const markdownString = serializeToMarkdown(newValue);
     const hiddenInput = hiddenInputRef.current;
-    let pushedEvent = false; // Flag to ensure we only push once
 
     if (hiddenInput) {
       hiddenInput.value = markdownString;
@@ -228,10 +241,12 @@ const SlateEditor = (props) => {
       hiddenInput.dispatchEvent(new Event('input', { bubbles: true }));
 
         } else {
-             console.warn("Hidden input not found for update:", uniqueId);
+             console.warn("Hidden input not found");
     }
-    // Removed pushEvent call - handled by hidden input's event listener in hook
-  }, [hiddenInputRef, uniqueId, pushEvent, serializeToMarkdown]);
+
+    // Check length on change as well
+    checkAndPushLength(newValue);
+  }, [hiddenInputRef, checkAndPushLength, serializeToMarkdown]);
 
   // --- Decoration Logic (Identifies syntax for styling) ---
   const decorate = useCallback(([node, path]) => {
@@ -386,6 +401,89 @@ const SlateEditor = (props) => {
     }
   }, [editor, updateHiddenInput, showToolbar, setValue]);
 
+    // --- *** NEW: onPaste Handler *** ---
+    const handlePaste = useCallback((event) => {
+        const pastedText = event.clipboardData.getData('text/plain');
+
+        if (pastedText.length >= PASTE_THRESHOLD) {
+            console.log(`Pasted text length (${pastedText.length}) exceeds threshold (${PASTE_THRESHOLD}). Converting to file.`);
+            event.preventDefault(); // Prevent default paste
+            // Push event to server to handle conversion
+            if (pushEvent) {
+                pushEvent("handle_paste_conversion", { content: pastedText });
+            }
+        }
+        // If below threshold, allow default paste or handle insertion manually
+        // For simplicity, let default happen if not prevented
+        // else { editor.insertText(pastedText); } // Manual insertion if preferred
+
+    }, [editor, pushEvent]); // Dependencies
+
+    useEffect(() => {
+        // Ensure handleEvent prop is available before registering listeners
+        if (!handleEvent) {
+             console.warn(`handleEvent prop not available for editor: ${uniqueId}`);
+             return; // Exit if handleEvent is not ready
+        }
+
+        console.log(`Setting up handleEvent listeners for ${uniqueId}`);
+
+        // --- Handler for Clearing Editor ---
+        const clearHandler = (payload) => {
+            // Check if the event is targeted at this specific editor instance
+            if (payload.uniqueId === uniqueId) {
+                console.log(`handleEvent 'clear_editor' received for ${uniqueId}`);
+                // Reset editor state using captured variables
+                Editor.withoutNormalizing(editor, () => {
+                    Transforms.delete(editor, {at: {anchor: Editor.start(editor, []), focus: Editor.end(editor, [])}});
+                    Transforms.insertNodes(editor, initialEmptyValue, { at: [0] });
+                    Transforms.select(editor, Editor.start(editor, []));
+                });
+                setValue(initialEmptyValue);
+                editor.history = { undos: [], redos: [] };
+                if (hiddenInputRef.current) hiddenInputRef.current.value = "";
+                checkAndPushLength(initialEmptyValue); // Update length tracker
+            }
+        };
+
+        // --- Handler for Getting Content for Conversion ---
+        const getContentHandler = (payload) => {
+            // Check if the event is targeted at this specific editor instance
+            if (payload.uniqueId === uniqueId) {
+                console.log(`handleEvent 'get_content_for_conversion' received for ${uniqueId}`);
+                const hiddenInput = hiddenInputRef.current;
+                // Ensure pushEvent is also available before pushing back
+                if (hiddenInput && pushEvent) {
+                    const currentContent = hiddenInput.value;
+                    console.log(`Pushing 'convert_to_file' back to server via pushEvent`);
+                    pushEvent("convert_to_file", { content: currentContent });
+                } else {
+                    console.warn(`Cannot handle get_content: Hidden input or pushEvent missing for ${uniqueId}.`);
+                }
+            }
+        };
+
+        // Register listeners using the handleEvent prop
+        // Returns a cleanup function or reference object
+        const clearCleanup = handleEvent("clear_editor", clearHandler);
+        const getContentCleanup = handleEvent("get_content_for_conversion", getContentHandler);
+
+        // Cleanup function to deregister listeners on unmount
+        return () => {
+            console.log(`Cleaning up handleEvent listeners for ${uniqueId}`);
+            // Check if cleanup is a function (older LV might return function)
+            if (typeof clearCleanup === 'function') clearCleanup();
+            if (typeof getContentCleanup === 'function') getContentCleanup();
+            // If cleanup returns an object with off() (newer LV versions)
+            // else if (clearCleanup && typeof clearCleanup.off === 'function') clearCleanup.off();
+            // else if (getContentCleanup && typeof getContentCleanup.off === 'function') getContentCleanup.off();
+            // Note: Check Phoenix LiveView JS docs for the exact cleanup mechanism if needed.
+            // Usually, LiveView handles cleanup automatically when the component unmounts if
+            // handleEvent is used correctly within useEffect. Explicit cleanup might be redundant.
+        };
+
+    // Dependencies: Ensure hooks run when needed props/functions change
+    }, [uniqueId, handleEvent, pushEvent, editor, setValue, checkAndPushLength]);
 
   // --- TODO: Implement Toolbar Button Handlers ---
   // These would use Transforms.setNodes, Editor.addMark, Editor.removeMark etc.
@@ -442,24 +540,29 @@ const SlateEditor = (props) => {
 
                 // 7. RESET EDITOR STATE
                 console.log("Resetting editor state after submit...");
-                // Use Transforms to clear content safely
-                Transforms.delete(editor, {
+
+		Editor.withoutNormalizing(editor, () => {
+                  // Use Transforms to clear content safely
+                  Transforms.delete(editor, {
                     at: {
                         anchor: Editor.start(editor, []),
                         focus: Editor.end(editor, []),
                     },
-                });
-                // Ensure the editor contains at least the initial empty block
-                // (delete might leave it empty, insert ensures structure)
-                 Transforms.insertNodes(editor, initialEmptyValue, { at: [0] });
-                 // Select the start of the now empty editor
-                 Transforms.select(editor, Editor.start(editor, []));
+                  });
+                  // Ensure the editor contains at least the initial empty block
+                  // (delete might leave it empty, insert ensures structure)
+                   Transforms.insertNodes(editor, initialEmptyValue, { at: [0] });
+                   // Select the start of the now empty editor
+                   Transforms.select(editor, Editor.start(editor, []));
+		});
 
                 // Also reset the React state variable to match
                 setValue(initialEmptyValue); // Use the constant
 
                 // Clear undo history after submitting
                 editor.history = { undos: [], redos: [] };
+
+	        checkAndPushLength(initialEmptyValue);
                 // --- *** END RESET *** ---
 
             } else {
@@ -598,8 +701,7 @@ const SlateEditor = (props) => {
         }
 
         // Default keydown handling will be done by Editable if we don't return
-    }, [editor, formId, uniqueId, updateHiddenInput, handleFormat, setValue]);;
-
+    }, [editor, formId, uniqueId, updateHiddenInput, handleFormat, setValue, checkAndPushLength, serializeToMarkdown]);;
 
   // --- Initial value setting ---
   // Needs to run only once or when initialValue prop changes
@@ -707,9 +809,10 @@ const SlateEditor = (props) => {
         autoFocus={autoFocus}
 	onKeyDown={handleKeyDown}
         className="prose message-editor-contenteditable min-h-[40px] max-h-[200px] overflow-y-auto px-3 py-2 focus:outline-none" // Match CSS
+	onPaste={handlePaste}
         id={`slate-editable-${uniqueId || 'editor'}`} // Unique ID for editable area if needed
       />
-      <input type="hidden" name={props.hiddenInputName || "new_message"} ref={hiddenInputRef} id={`${uniqueId || 'editor'}-hidden-input`} />
+      <input type="hidden" name={hiddenInputName || "new_message"} ref={hiddenInputRef} id={`${uniqueId || 'editor'}-hidden-input`} />
     </Slate>
   );
 };
